@@ -16,7 +16,7 @@ const isOperation = (value: unknown): value is AiOperation =>
 export const parseAiResponse = (json: string): AiResponse => {
   const value = JSON.parse(json) as Partial<AiResponse>;
   if (value.schemaVersion !== 1 || !Array.isArray(value.operations) || !value.operations.every(isOperation)) {
-    throw new Error("The reply is not a valid daybook change set.");
+    throw new Error("The reply is not a valid AIfoodpal change set.");
   }
   return value as AiResponse;
 };

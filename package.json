@@ -1,5 +1,5 @@
 {
-  "name": "daybook",
+  "name": "aifoodpal",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -8,6 +8,9 @@
     "build": "tsc -b && vite build",
     "test": "vitest run",
     "check": "tsc -b --pretty false"
+  },
+  "dependencies": {
+    "lucide": "^1.31.0"
   },
   "devDependencies": {
     "typescript": "^5.9.2",
