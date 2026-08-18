@@ -14,11 +14,62 @@ const isOperation = (value: unknown): value is AiOperation =>
   Boolean(value && typeof value === "object" && ["upsertFood", "addEntry", "addWeight", "updateProfile", "setGoal"].includes(String((value as { type?: unknown }).type)));
 
 export const parseAiResponse = (json: string): AiResponse => {
-  const value = JSON.parse(json) as Partial<AiResponse>;
-  if (value.schemaVersion !== 1 || !Array.isArray(value.operations) || !value.operations.every(isOperation)) {
+  let value: Partial<AiResponse>;
+  try {
+    value = JSON.parse(json) as Partial<AiResponse>;
+  } catch {
+    throw new Error("That text is not valid JSON. Copy the complete AI response and try again.");
+  }
+  if (value.schemaVersion !== 1) {
+    throw new Error(value.schemaVersion == null ? "The AI response is missing schemaVersion 1." : `Schema version ${value.schemaVersion} is not supported.`);
+  }
+  if (!Array.isArray(value.operations) || !value.operations.every(isOperation)) {
     throw new Error("The reply is not a valid AIfoodpal change set.");
   }
   return value as AiResponse;
+};
+
+export const buildFoodAiPrompt = (state: AppState, draft: FoodInput): string => `You are a structured data assistant for AIfoodpal, a private food tracker. Return ONLY valid JSON with no markdown or code fences.
+
+Create or complete the food below as one upsertFood operation.
+
+Rules:
+- Nutrition represents ONE serving. Do not multiply values.
+- Preserve every known value in PARTIAL FOOD unless you have an explicit replacement.
+- Unknown detailed nutrients must be null, never invented as 0.
+- Use 0 only when a nutrient is confidently zero.
+- sugarG is TOTAL sugar. addedSugarG is ADDED sugar only.
+- If this is a recipe, include recipe.ingredients and optional recipe.instructions. Ingredient nutrition is optional and unknown values are null.
+- A recipe is still one food. Do not create separate foods or entries for its ingredients.
+- Do not add an addEntry operation. The user will review and save manually.
+
+Required output:
+{"schemaVersion":1,"summary":"short summary","operations":[{"type":"upsertFood","food":{"name":"string","brand":null,"serving":{"amount":1,"unit":"serving","description":"1 serving"},"nutrition":{"calories":0,"proteinG":0,"carbsG":0,"fatG":0,"fiberG":null,"sugarG":null,"addedSugarG":null,"saturatedFatG":null,"transFatG":null,"sodiumMg":null},"recipe":null,"sourceType":"user|label|restaurant|estimate","confidence":"high|medium|low","notes":null}}]}
+
+Recipe shape when applicable:
+{"ingredients":[{"name":"ingredient","amount":1,"unit":"cup","nutrition":{"calories":null,"proteinG":null,"carbsG":null,"fatG":null}}],"instructions":"optional directions"}
+
+CURRENT APP CONTEXT:
+${JSON.stringify({ selectedDate: state.prefs.date, units: state.profile.units, existingFoods: state.foods.map(({ id, name, brand }) => ({ id, name, brand })) }, null, 2)}
+
+PARTIAL FOOD:
+${JSON.stringify(draft, null, 2)}`;
+
+export const importFoodDraft = (current: FoodInput, json: string): FoodInput => {
+  const response = parseAiResponse(json);
+  const operation = response.operations.find((item): item is UpsertFoodOperation => item.type === "upsertFood");
+  if (!operation) throw new Error("The AI response does not contain an upsertFood operation.");
+  if (!operation.food || typeof operation.food !== "object") throw new Error("The upsertFood operation is missing its food data.");
+  const merged: FoodInput = {
+    ...current,
+    ...operation.food,
+    serving: { ...(current.serving ?? {}), ...(operation.food.serving ?? {}) },
+    nutrition: { ...(current.nutrition ?? {}), ...(operation.food.nutrition ?? {}) },
+    recipe: operation.food.recipe === undefined ? current.recipe : operation.food.recipe,
+  };
+  if (current.id) merged.id = current.id;
+  else delete merged.id;
+  return merged;
 };
 
 export const buildAiPrompt = (state: AppState, request: string): string => {
@@ -41,9 +92,10 @@ Rules:
 - Preserve known values unless the user asks to correct them.
 - Unknown detailed nutrients must be null, not 0.
 - sugarG is total sugar; addedSugarG is added sugar only.
+- Recipes remain one food and one diary entry. Store ingredients and instructions in food.recipe; never log ingredients separately.
 
 Allowed operations:
-1) {"type":"upsertFood","food":{"id":"existing id when updating","name":"string","brand":null,"serving":{"amount":1,"unit":"serving","description":"1 serving"},"nutrition":{"calories":0,"proteinG":0,"carbsG":0,"fatG":0,"fiberG":null,"sugarG":null,"addedSugarG":null,"saturatedFatG":null,"transFatG":null,"sodiumMg":null},"sourceType":"user|label|restaurant|estimate","confidence":"high|medium|low","notes":null}}
+1) {"type":"upsertFood","food":{"id":"existing id when updating","name":"string","brand":null,"serving":{"amount":1,"unit":"serving","description":"1 serving"},"nutrition":{"calories":0,"proteinG":0,"carbsG":0,"fatG":0,"fiberG":null,"sugarG":null,"addedSugarG":null,"saturatedFatG":null,"transFatG":null,"sodiumMg":null},"recipe":null,"sourceType":"user|label|restaurant|estimate","confidence":"high|medium|low","notes":null}}
 2) {"type":"addEntry","entry":{"date":"YYYY-MM-DD","period":"breakfast|lunch|dinner|snacks","servings":1,"foodId":"existing id"}} (or include "food" for a new food)
 3) {"type":"addWeight","date":"YYYY-MM-DD","weightLb":180.5}
 4) {"type":"updateProfile","changes":{"age":30,"heightIn":70,"weightLb":180,"activityPAL":1.6,"manualDailyGuide":null}}

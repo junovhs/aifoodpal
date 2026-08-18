@@ -1,11 +1,12 @@
-import { applyAiResponse, buildAiPrompt, parseAiResponse, type AiResponse } from "./ai";
-import { createEntry, normalizeFood, normalizePeriod, PERIODS, uid, type AppState, type Food, type Period } from "./model";
+import { applyAiResponse, buildAiPrompt, buildFoodAiPrompt, importFoodDraft, parseAiResponse, type AiResponse } from "./ai";
+import { createEntry, createQuickCalorieEntry, normalizeFood, normalizePeriod, PERIODS, uid, type AppState, type Food, type FoodInput, type Period, type RecipeIngredient } from "./model";
 import { calorieGuidance, dailyCalorieGuide, formatDate, kgToPounds, latestWeight, nutritionTargets, poundsToKg, round, shiftDate, totalsFor } from "./nutrition";
 import { exportBackup, parseBackup, type StateRepository } from "./storage";
 import { icon, renderIcons } from "./icons";
 
 type View = "day" | "library" | "trend" | "settings";
-type Modal = { kind: "food"; food?: Food } | { kind: "choose" } | { kind: "log"; food: Food } | { kind: "weight" } | { kind: "backup" } | { kind: "ai"; stage: "request" | "prompt" | "reply" | "preview"; prompt?: string; response?: AiResponse } | null;
+type FoodModal = { kind: "food"; food?: Food; draft?: FoodInput; aiMessage?: string; aiError?: string };
+type Modal = FoodModal | { kind: "quick"; calories: number; period: Period } | { kind: "choose" } | { kind: "log"; food: Food } | { kind: "weight" } | { kind: "backup" } | { kind: "ai"; stage: "request" | "prompt" | "reply" | "preview"; prompt?: string; response?: AiResponse } | null;
 
 const html = (value: unknown): string => String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;");
 const fmt = (value: number | null | undefined, digits = 0): string => value == null ? "?" : new Intl.NumberFormat(undefined, { maximumFractionDigits: digits }).format(value);
@@ -25,6 +26,8 @@ export class DaybookApp {
   start(): void {
     this.root.addEventListener("click", (event) => this.onClick(event));
     this.root.addEventListener("submit", (event) => this.onSubmit(event));
+    this.root.addEventListener("change", (event) => this.onChange(event));
+    this.root.addEventListener("input", (event) => this.onInput(event));
     this.render();
   }
 
@@ -61,7 +64,7 @@ export class DaybookApp {
     const pct = guide ? Math.min(100, totals.calories / guide * 100) : 0;
     const meals = PERIODS.map((period) => this.meal(period, date)).join("");
     const remaining = guide ? Math.max(0, guide - totals.calories) : null;
-    return `<div class="page-intro"><div><span class="eyebrow">Daily diary</span><h1>${formatDate(date, true)}</h1></div><div class="datebar"><button class="icon-btn" data-action="date" data-days="-1" aria-label="Previous day">${icon("ChevronLeft")}</button><button class="today-btn" data-action="today">Today</button><button class="icon-btn" data-action="date" data-days="1" aria-label="Next day">${icon("ChevronRight")}</button></div></div><section class="card summary"><div class="summary-top"><div><div class="summary-label">Calories logged</div><div class="guide"><span class="big">${fmt(totals.calories)}</span><span>${guide ? `of ${fmt(guide)}` : "kcal"}</span></div><div class="summary-note">${remaining == null ? "Add your baseline to create a daily guide." : `${fmt(remaining)} kcal remaining today`}</div></div><button class="btn-primary btn-icon" data-action="choose-food">${icon("Plus")}<span>Add food</span></button></div><div class="progress" aria-label="${fmt(pct)} percent of calorie guide"><div style="width:${pct}%"></div></div><div class="macros">${this.macro("protein", totals.proteinG, targets?.proteinG)}${this.macro("carbs", totals.carbsG, targets?.carbsG)}${this.macro("fat", totals.fatG, targets?.fatG)}${this.macro("fiber", totals.fiberG, targets?.fiberG)}</div></section><div class="section-heading"><span>Meals</span><span>${this.state.entries.filter((entry) => entry.date === date).length} entries</span></div>${meals}`;
+    return `<div class="page-intro"><div><span class="eyebrow">Daily diary</span><h1>${formatDate(date, true)}</h1></div><div class="datebar"><button class="icon-btn" data-action="date" data-days="-1" aria-label="Previous day">${icon("ChevronLeft")}</button><button class="today-btn" data-action="today">Today</button><button class="icon-btn" data-action="date" data-days="1" aria-label="Next day">${icon("ChevronRight")}</button></div></div><section class="card summary"><div class="summary-top"><div><div class="summary-label">Calories logged</div><div class="guide"><span class="big">${fmt(totals.calories)}</span><span>${guide ? `of ${fmt(guide)}` : "kcal"}</span></div><div class="summary-note">${remaining == null ? "Add your baseline to create a daily guide." : `${fmt(remaining)} kcal remaining today`}</div></div><div class="summary-actions"><button class="btn btn-icon" data-action="open-quick">${icon("Gauge")}<span>Quick Add</span></button><button class="btn-primary btn-icon" data-action="choose-food">${icon("Plus")}<span>Add food</span></button></div></div><div class="progress" aria-label="${fmt(pct)} percent of calorie guide"><div style="width:${pct}%"></div></div><div class="macros">${this.macro("protein", totals.proteinG, targets?.proteinG)}${this.macro("carbs", totals.carbsG, targets?.carbsG)}${this.macro("fat", totals.fatG, targets?.fatG)}${this.macro("fiber", totals.fiberG, targets?.fiberG)}</div></section><div class="section-heading"><span>Meals</span><span>${this.state.entries.filter((entry) => entry.date === date).length} entries</span></div>${meals}`;
   }
 
   private macro(label: string, value: number | null, target?: number): string {
@@ -72,16 +75,30 @@ export class DaybookApp {
   private meal(period: Period, date: string): string {
     const entries = this.state.entries.filter((entry) => entry.date === date && entry.period === period);
     const total = totalsFor(this.state, date, period);
-    return `<section class="mealgroup card"><div class="mealhead"><div><div class="mealname">${period}</div><div class="mealsum">${fmt(total.calories)} kcal · ${fmt(total.proteinG, 1)}p · ${fmt(total.carbsG, 1)}c · ${fmt(total.fatG, 1)}f</div></div><button class="icon-btn subtle" data-action="choose-food" data-period="${period}" aria-label="Add ${period}">${icon("Plus")}</button></div>${entries.length ? `<div class="entrylist">${entries.map((entry) => `<div class="entry"><div class="food-icon">${icon("Utensils")}</div><div class="entrymain"><div class="ename">${html(entry.nameSnapshot)}</div><div class="esub">${html(entry.servingSnapshot.description)} × ${fmt(entry.servings, 2)}</div></div><div class="entrymacro">${this.macroBar(entry.nutritionSnapshot.proteinG, entry.nutritionSnapshot.carbsG, entry.nutritionSnapshot.fatG)}</div><span class="ekcal">${fmt(entry.nutritionSnapshot.calories * entry.servings)} <small>kcal</small></span><button class="icon-btn danger" data-action="delete-entry" data-id="${entry.id}" aria-label="Remove ${html(entry.nameSnapshot)}">${icon("Trash2")}</button></div>`).join("")}</div>` : `<button class="mealempty" data-action="choose-food" data-period="${period}">${icon("Plus")}<span>Add something to ${period}</span></button>`}</section>`;
+    return `<section class="mealgroup card"><div class="mealhead"><div><div class="mealname">${period}</div><div class="mealsum">${fmt(total.calories)} kcal · ${fmt(total.proteinG, 1)}p · ${fmt(total.carbsG, 1)}c · ${fmt(total.fatG, 1)}f</div></div><button class="icon-btn subtle" data-action="choose-food" data-period="${period}" aria-label="Add ${period}">${icon("Plus")}</button></div>${entries.length ? `<div class="entrylist">${entries.map((entry) => this.entryHtml(entry)).join("")}</div>` : `<button class="mealempty" data-action="choose-food" data-period="${period}">${icon("Plus")}<span>Add something to ${period}</span></button>`}</section>`;
   }
 
-  private macroBar(protein: number, carbs: number, fat: number): string {
-    const calories = protein * 4 + carbs * 4 + fat * 9 || 1;
-    return `<div class="macrobar"><span class="p" style="width:${protein * 4 / calories * 100}%"></span><span class="c" style="width:${carbs * 4 / calories * 100}%"></span><span class="f" style="width:${fat * 9 / calories * 100}%"></span></div><div class="macrolegend"><span><b>${fmt(protein, 1)}g</b> protein</span><span><b>${fmt(carbs, 1)}g</b> carbs</span><span><b>${fmt(fat, 1)}g</b> fat</span></div>`;
+  private entryHtml(entry: AppState["entries"][number]): string {
+    const summary = `<div class="food-icon">${icon(entry.recipeSnapshot ? "ChefHat" : "Utensils")}</div><div class="entrymain"><div class="ename">${html(entry.nameSnapshot)}</div><div class="esub">${html(entry.servingSnapshot.description)} × ${fmt(entry.servings, 2)}${entry.recipeSnapshot ? ` · ${entry.recipeSnapshot.ingredients.length} ingredients` : ""}</div></div><div class="entrymacro">${this.macroBar(entry.nutritionSnapshot.proteinG, entry.nutritionSnapshot.carbsG, entry.nutritionSnapshot.fatG)}</div><span class="ekcal">${fmt(entry.nutritionSnapshot.calories * entry.servings)} <small>kcal</small></span><button class="icon-btn danger" data-action="delete-entry" data-id="${entry.id}" aria-label="Remove ${html(entry.nameSnapshot)}">${icon("Trash2")}</button>`;
+    if (!entry.recipeSnapshot) return `<div class="entry">${summary}</div>`;
+    const ingredients = entry.recipeSnapshot.ingredients.map((ingredient) => {
+      const amount = ingredient.amount == null ? "" : fmt(ingredient.amount * entry.servings, 2);
+      const nutrient = ingredient.nutrition;
+      const macros = [[nutrient.calories, "kcal"], [nutrient.proteinG, "p"], [nutrient.carbsG, "c"], [nutrient.fatG, "f"]].filter(([value]) => value !== null).map(([value, label]) => `${fmt((value as number) * entry.servings, 1)}${label}`).join(" · ");
+      return `<li><span>${html([amount, ingredient.unit, ingredient.name].filter(Boolean).join(" "))}</span><span>${macros}</span></li>`;
+    }).join("");
+    return `<details class="recipe-entry"><summary class="entry">${summary}</summary><div class="recipe-entry-body"><div class="recipe-caption">Ingredients for ${fmt(entry.servings, 2)} logged serving${entry.servings === 1 ? "" : "s"}</div><ul>${ingredients || "<li><span>No ingredients listed</span></li>"}</ul>${entry.recipeSnapshot.instructions ? `<div class="recipe-instructions"><strong>Instructions</strong><p>${html(entry.recipeSnapshot.instructions).replaceAll("\n", "<br>")}</p></div>` : ""}</div></details>`;
+  }
+
+  private macroBar(protein: number | null, carbs: number | null, fat: number | null): string {
+    if (protein === null && carbs === null && fat === null) return `<div class="macro-unknown">Macros unknown</div>`;
+    const p = protein ?? 0, c = carbs ?? 0, f = fat ?? 0;
+    const calories = p * 4 + c * 4 + f * 9 || 1;
+    return `<div class="macrobar"><span class="p" style="width:${p * 4 / calories * 100}%"></span><span class="c" style="width:${c * 4 / calories * 100}%"></span><span class="f" style="width:${f * 9 / calories * 100}%"></span></div><div class="macrolegend"><span><b>${fmt(protein, 1)}g</b> protein</span><span><b>${fmt(carbs, 1)}g</b> carbs</span><span><b>${fmt(fat, 1)}g</b> fat</span></div>`;
   }
 
   private library(): string {
-    const cards = [...this.state.foods].sort((a, b) => a.name.localeCompare(b.name)).map((food) => `<div class="library-card"><div class="library-symbol">${icon("Utensils")}</div><div class="grow"><div class="library-name">${html(food.name)}</div><div class="tiny">${html(food.brand || food.serving.description)} · ${fmt(food.nutrition.calories)} kcal</div></div><div class="row"><button class="tiny-btn btn-icon" data-action="log" data-id="${food.id}">${icon("Plus")}<span>Log</span></button><button class="icon-btn subtle" data-action="edit-food" data-id="${food.id}" aria-label="Edit ${html(food.name)}">${icon("Pencil")}</button></div></div>`).join("");
+    const cards = [...this.state.foods].sort((a, b) => a.name.localeCompare(b.name)).map((food) => `<div class="library-card"><div class="library-symbol">${icon(food.recipe ? "ChefHat" : "Utensils")}</div><div class="grow"><div class="library-name">${html(food.name)}</div><div class="tiny">${html(food.brand || food.serving.description)} · ${fmt(food.nutrition.calories)} kcal${food.recipe ? ` · recipe · ${food.recipe.ingredients.length} ingredients` : ""}</div></div><div class="row"><button class="tiny-btn btn-icon" data-action="log" data-id="${food.id}">${icon("Plus")}<span>Log</span></button><button class="icon-btn subtle" data-action="edit-food" data-id="${food.id}" aria-label="Edit ${html(food.name)}">${icon("Pencil")}</button></div></div>`).join("");
     return `<div class="head"><div><span class="eyebrow">Saved foods</span><h1 class="title">Food library</h1><p class="subtitle">Reusable nutrition records, ready for your next meal.</p></div><button class="btn-primary btn-icon" data-action="new-food">${icon("Plus")}<span>New food</span></button></div>${cards || `<div class="empty empty-rich"><span class="empty-icon">${icon("BookOpen")}</span><strong>Your library is ready</strong><span>Create a food here, or ask an AI to structure your first meal.</span><button class="btn-primary btn-icon" data-action="new-food">${icon("Plus")}<span>Create food</span></button></div>`}`;
   }
 
@@ -106,7 +123,8 @@ export class DaybookApp {
   private modalHtml(): string {
     if (!this.modal) return "";
     let body = "";
-    if (this.modal.kind === "food") body = this.foodForm(this.modal.food);
+    if (this.modal.kind === "food") body = this.foodForm(this.modal);
+    if (this.modal.kind === "quick") body = this.quickCalorieForm(this.modal);
     if (this.modal.kind === "choose") body = `<div class="mhead"><div>choose a food</div>${this.close()}</div><div class="stack">${this.state.foods.map((food) => `<button class="searchitem" data-action="log" data-id="${food.id}"><span><span>${html(food.name)}</span><span class="tiny">${html(food.brand || food.serving.description)}</span></span><span>${fmt(food.nutrition.calories)} kcal</span></button>`).join("")}<button class="btn" data-action="new-food">create a new food</button></div>`;
     if (this.modal.kind === "log") body = this.logForm(this.modal.food);
     if (this.modal.kind === "weight") body = `<form data-form="weight"><div class="mhead"><div>weight check-in</div>${this.close()}</div>${field(`weight (${this.weightUnit()})`, "weight", this.displayWeight(latestWeight(this.state)) ?? "", "number", "min=1 step=.1 required")}${field("date", "date", this.state.prefs.date, "date", "required")}<div class="mfooter"><button class="btn-primary">save</button></div></form>`;
@@ -117,9 +135,20 @@ export class DaybookApp {
 
   private close(): string { return `<button class="close" data-action="close" aria-label="Close">${icon("X")}</button>`; }
 
-  private foodForm(food?: Food): string {
+  private foodForm(modal: FoodModal): string {
+    const food = modal.draft ?? modal.food;
     const n = food?.nutrition;
-    return `<form data-form="food" data-id="${food?.id ?? ""}"><div class="mhead"><div>${food ? "edit food" : "new food"}</div>${this.close()}</div><div class="two">${field("name", "name", food?.name ?? "", "text", "required")}${field("brand", "brand", food?.brand ?? "", "text")}${field("serving description", "description", food?.serving.description ?? "1 serving", "text", "required")}${field("calories", "calories", n?.calories ?? 0, "number", "min=0 required")}${field("protein (g)", "proteinG", n?.proteinG ?? 0, "number", "min=0 step=.1 required")}${field("carbs (g)", "carbsG", n?.carbsG ?? 0, "number", "min=0 step=.1 required")}${field("fat (g)", "fatG", n?.fatG ?? 0, "number", "min=0 step=.1 required")}${field("fiber (g)", "fiberG", n?.fiberG ?? "", "number", "min=0 step=.1")}${field("total sugar (g)", "sugarG", n?.sugarG ?? "", "number", "min=0 step=.1")}${field("added sugar (g)", "addedSugarG", n?.addedSugarG ?? "", "number", "min=0 step=.1")}${field("saturated fat (g)", "saturatedFatG", n?.saturatedFatG ?? "", "number", "min=0 step=.1")}${field("sodium (mg)", "sodiumMg", n?.sodiumMg ?? "", "number", "min=0 step=1")}</div><div class="mfooter"><button class="btn-primary">save food</button></div></form>`;
+    const recipe = food?.recipe;
+    const ingredients = recipe?.ingredients ?? [];
+    return `<form data-form="food" data-id="${modal.food?.id ?? ""}"><div class="mhead"><div>${modal.food ? "edit food" : "new food"}</div>${this.close()}</div><section class="ai-assist"><div class="ai-assist-head"><span class="ai-assist-icon">${icon("Sparkles")}</span><div><strong>AI Assist</strong><div>Use ChatGPT to estimate or extract this food.</div></div></div><div class="ai-actions"><button class="btn btn-icon" type="button" data-action="ask-food-ai">${icon("Copy")}<span>Ask AI</span></button><button class="btn btn-icon" type="button" data-action="apply-food-clipboard">${icon("ClipboardPaste")}<span>Apply Clipboard</span></button></div>${modal.aiMessage ? `<div class="notice success">${icon("Check")}${html(modal.aiMessage)}</div>` : ""}${modal.aiError ? `<div class="notice warn">${html(modal.aiError)}</div>` : ""}<details class="ai-fallback"><summary>Paste AI response manually</summary><textarea class="code" id="ai-food-manual" placeholder='{"schemaVersion":1,...}'></textarea><button class="tiny-btn" type="button" data-action="apply-food-manual">Apply</button></details></section><div class="two">${field("name", "name", food?.name ?? "", "text", "required")}${field("brand", "brand", food?.brand ?? "", "text")}${field("serving description", "description", food?.serving?.description ?? "1 serving", "text", "required")}${field("calories", "calories", n?.calories ?? 0, "number", "min=0 required")}${field("protein (g)", "proteinG", n?.proteinG ?? "", "number", "min=0 step=.1")}${field("carbs (g)", "carbsG", n?.carbsG ?? "", "number", "min=0 step=.1")}${field("fat (g)", "fatG", n?.fatG ?? "", "number", "min=0 step=.1")}${field("fiber (g)", "fiberG", n?.fiberG ?? "", "number", "min=0 step=.1")}${field("total sugar (g)", "sugarG", n?.sugarG ?? "", "number", "min=0 step=.1")}${field("added sugar (g)", "addedSugarG", n?.addedSugarG ?? "", "number", "min=0 step=.1")}${field("saturated fat (g)", "saturatedFatG", n?.saturatedFatG ?? "", "number", "min=0 step=.1")}${field("sodium (mg)", "sodiumMg", n?.sodiumMg ?? "", "number", "min=0 step=1")}</div><label class="recipe-toggle"><input type="checkbox" name="isRecipe" ${recipe ? "checked" : ""}><span>${icon("ChefHat")}<b>Is this a recipe?</b><small>Add ingredients, their optional macros, and instructions.</small></span></label>${recipe ? `<section class="recipe-editor"><div class="between"><div><strong>Ingredients</strong><div class="tiny">Amounts and component macros are optional.</div></div><button class="tiny-btn btn-icon" type="button" data-action="add-ingredient">${icon("ListPlus")}<span>Add ingredient</span></button></div><div class="ingredient-list">${ingredients.map((ingredient, index) => this.ingredientFields(ingredient, index)).join("")}</div><label class="field"><span>recipe instructions (optional)</span><textarea name="instructions" placeholder="Mix, cook, portion…">${html(recipe.instructions ?? "")}</textarea></label></section>` : ""}<div class="mfooter"><button class="btn-primary">save food</button></div></form>`;
+  }
+
+  private ingredientFields(ingredient: Partial<Omit<RecipeIngredient, "nutrition">> & { nutrition?: Partial<RecipeIngredient["nutrition"]> }, index: number): string {
+    return `<div class="ingredient" data-ingredient="${index}"><div class="ingredient-head"><span>Ingredient ${index + 1}</span><button class="icon-btn danger" type="button" data-action="remove-ingredient" data-index="${index}" aria-label="Remove ingredient">${icon("Trash2")}</button></div><div class="ingredient-main">${field("name", `ingredientName_${index}`, ingredient.name ?? "", "text", "placeholder='e.g. black beans'")}${field("amount", `ingredientAmount_${index}`, ingredient.amount ?? "", "number", "min=0 step=any")}${field("unit", `ingredientUnit_${index}`, ingredient.unit ?? "", "text", "placeholder='cup, g, tbsp'")}</div><details class="ingredient-macros"><summary>Component macros (optional)</summary><div class="four">${field("calories", `ingredientCalories_${index}`, ingredient.nutrition?.calories ?? "", "number", "min=0")}${field("protein g", `ingredientProtein_${index}`, ingredient.nutrition?.proteinG ?? "", "number", "min=0 step=.1")}${field("carbs g", `ingredientCarbs_${index}`, ingredient.nutrition?.carbsG ?? "", "number", "min=0 step=.1")}${field("fat g", `ingredientFat_${index}`, ingredient.nutrition?.fatG ?? "", "number", "min=0 step=.1")}</div></details></div>`;
+  }
+
+  private quickCalorieForm(modal: Extract<Modal, { kind: "quick" }>): string {
+    return `<form data-form="quick"><div class="mhead"><div><div>Quick calories</div><div class="tiny">Fast estimate, no invented macros</div></div>${this.close()}</div><div class="quick-picker"><div class="quick-screen"><input name="calories" data-quick-calories type="number" min="0" step="1" inputmode="numeric" value="${modal.calories}" aria-label="Calories"><span>kcal</span></div><div class="quick-increments">${[10, 25, 50, 100, 250].map((amount) => `<button type="button" data-action="quick-increment" data-amount="${amount}">+${amount}</button>`).join("")}</div></div><fieldset class="period-picker"><legend>Meal</legend>${PERIODS.map((period) => `<label><input type="radio" name="period" value="${period}" ${period === modal.period ? "checked" : ""}><span>${period}</span></label>`).join("")}</fieldset><button class="btn-primary quick-confirm btn-icon" type="submit">${icon("Check")}<span>Log ${fmt(modal.calories)} calories</span></button></form>`;
   }
 
   private logForm(food: Food): string {
@@ -144,6 +173,8 @@ export class DaybookApp {
     if (action === "new-food") { this.modal = { kind: "food" }; this.render(); }
     if (action === "edit-food") { const food = this.food(button.dataset.id); if (food) { this.modal = { kind: "food", food }; this.render(); } }
     if (action === "choose-food") { this.modal = this.state.foods.length ? { kind: "choose" } : { kind: "food" }; this.render(); }
+    if (action === "open-quick") { this.modal = { kind: "quick", calories: 0, period: "snacks" }; this.render(); }
+    if (action === "quick-increment" && this.modal?.kind === "quick") { this.modal.calories += Number(button.dataset.amount) || 0; this.render(); }
     if (action === "log") { const food = this.food(button.dataset.id); if (food) { this.modal = { kind: "log", food }; this.render(); } }
     if (action === "delete-entry") { this.state.entries = this.state.entries.filter((entry) => entry.id !== button.dataset.id); this.save("entry removed"); }
     if (action === "open-weight") { this.modal = { kind: "weight" }; this.render(); }
@@ -155,6 +186,43 @@ export class DaybookApp {
     if (action === "copy-prompt" && this.modal?.kind === "ai") void this.copy(this.modal.prompt ?? "", "packet copied");
     if (action === "ai-reply") { this.modal = { kind: "ai", stage: "reply" }; this.render(); }
     if (action === "apply-ai" && this.modal?.kind === "ai" && this.modal.response) { const result = applyAiResponse(this.state, this.modal.response); this.state = result.state; this.modal = null; this.save(`${result.applied} changes applied`); }
+    if (action === "ask-food-ai") void this.askFoodAi();
+    if (action === "apply-food-clipboard") void this.applyFoodClipboard();
+    if (action === "apply-food-manual") {
+      const raw = this.root.querySelector<HTMLTextAreaElement>("#ai-food-manual")?.value ?? "";
+      this.applyFoodImport(raw);
+    }
+    if (action === "add-ingredient" && this.modal?.kind === "food") {
+      const draft = this.captureFoodDraft();
+      draft.recipe ??= { ingredients: [], instructions: null };
+      draft.recipe.ingredients ??= [];
+      draft.recipe.ingredients.push({ name: "", amount: null, unit: "", nutrition: {} });
+      this.modal = { ...this.modal, draft, aiMessage: undefined, aiError: undefined };
+      this.render();
+    }
+    if (action === "remove-ingredient" && this.modal?.kind === "food") {
+      const draft = this.captureFoodDraft();
+      draft.recipe?.ingredients?.splice(Number(button.dataset.index), 1);
+      this.modal = { ...this.modal, draft, aiMessage: undefined, aiError: undefined };
+      this.render();
+    }
+  }
+
+  private onChange(event: Event): void {
+    const target = event.target as HTMLInputElement;
+    if (target.name !== "isRecipe" || this.modal?.kind !== "food") return;
+    const draft = this.captureFoodDraft();
+    draft.recipe = target.checked ? (draft.recipe ?? { ingredients: [{ name: "", amount: null, unit: "", nutrition: {} }], instructions: null }) : null;
+    this.modal = { ...this.modal, draft, aiMessage: undefined, aiError: undefined };
+    this.render();
+  }
+
+  private onInput(event: Event): void {
+    const target = event.target as HTMLInputElement;
+    if (!target.matches("[data-quick-calories]") || this.modal?.kind !== "quick") return;
+    this.modal.calories = Math.max(0, Math.round(Number(target.value) || 0));
+    const label = this.root.querySelector<HTMLElement>(".quick-confirm span");
+    if (label) label.textContent = `Log ${this.modal.calories} calories`;
   }
 
   private onSubmit(event: Event): void {
@@ -166,6 +234,7 @@ export class DaybookApp {
     try {
       if (kind === "onboarding") this.submitOnboarding(data);
       if (kind === "food") this.submitFood(data, form.dataset.id);
+      if (kind === "quick") this.submitQuick(data);
       if (kind === "log") this.submitLog(data, form.dataset.id);
       if (kind === "weight") this.submitWeight(data);
       if (kind === "restore") { this.state = parseBackup(String(data.get("backup"))); this.modal = null; this.save("backup restored"); }
@@ -183,10 +252,20 @@ export class DaybookApp {
 
   private submitFood(data: FormData, id?: string): void {
     const previous = this.food(id);
-    const food = normalizeFood({ ...previous, id: previous?.id, name: String(data.get("name")), brand: String(data.get("brand")) || null, serving: { ...previous?.serving, amount: 1, unit: "serving", description: String(data.get("description")) }, nutrition: { calories: getNumber(data, "calories") ?? 0, proteinG: getNumber(data, "proteinG") ?? 0, carbsG: getNumber(data, "carbsG") ?? 0, fatG: getNumber(data, "fatG") ?? 0, fiberG: getNumber(data, "fiberG"), sugarG: getNumber(data, "sugarG"), addedSugarG: getNumber(data, "addedSugarG"), saturatedFatG: getNumber(data, "saturatedFatG"), sodiumMg: getNumber(data, "sodiumMg") } });
+    const draft = this.captureFoodDraft(data);
+    const imported = this.modal?.kind === "food" ? this.modal.draft : undefined;
+    const food = normalizeFood({ ...previous, ...imported, ...draft, id: previous?.id });
     const index = previous ? this.state.foods.findIndex((item) => item.id === previous.id) : -1;
     if (index >= 0) this.state.foods[index] = food; else this.state.foods.push(food);
     this.modal = null; this.save("food saved");
+  }
+
+  private submitQuick(data: FormData): void {
+    const calories = getNumber(data, "calories");
+    if (!calories || calories <= 0) throw new Error("Add at least 1 calorie.");
+    this.state.entries.push(createQuickCalorieEntry(calories, this.state.prefs.date, normalizePeriod(data.get("period"))));
+    this.modal = null;
+    this.save(`${Math.round(calories)} calories logged`);
   }
 
   private submitLog(data: FormData, id?: string): void { const food = this.food(id); if (!food) throw new Error("Food no longer exists."); this.state.entries.push(createEntry(food, String(data.get("date")), normalizePeriod(data.get("period")), getNumber(data, "servings") ?? 1)); this.modal = null; this.save("added to day"); }
@@ -196,7 +275,96 @@ export class DaybookApp {
   private food(id?: string): Food | undefined { return this.state.foods.find((food) => food.id === id); }
   private displayWeight(value: number | null | undefined): number | null { return value == null ? null : round(this.state.profile.units === "metric" ? poundsToKg(value) : value, 1); }
   private weightUnit(): string { return this.state.profile.units === "metric" ? "kg" : "lb"; }
-  private async copy(value: string, message: string): Promise<void> { await navigator.clipboard.writeText(value); this.showToast(message); }
+  private captureFoodDraft(existingData?: FormData): FoodInput {
+    const form = this.root.querySelector<HTMLFormElement>('form[data-form="food"]');
+    const data = existingData ?? (form ? new FormData(form) : new FormData());
+    const base = this.modal?.kind === "food" ? (this.modal.draft ?? this.modal.food ?? {}) : {};
+    const recipeEnabled = data.get("isRecipe") === "on";
+    const ingredients = form ? [...form.querySelectorAll<HTMLElement>("[data-ingredient]")].map((_row, index) => ({
+      id: base.recipe?.ingredients?.[index]?.id,
+      name: String(data.get(`ingredientName_${index}`) ?? ""),
+      amount: getNumber(data, `ingredientAmount_${index}`),
+      unit: String(data.get(`ingredientUnit_${index}`) ?? ""),
+      nutrition: {
+        calories: getNumber(data, `ingredientCalories_${index}`),
+        proteinG: getNumber(data, `ingredientProtein_${index}`),
+        carbsG: getNumber(data, `ingredientCarbs_${index}`),
+        fatG: getNumber(data, `ingredientFat_${index}`),
+      },
+    })) : (base.recipe?.ingredients ?? []);
+    return {
+      ...base,
+      name: String(data.get("name") ?? base.name ?? ""),
+      brand: String(data.get("brand") ?? base.brand ?? "") || null,
+      serving: { ...(base.serving ?? {}), amount: 1, unit: "serving", description: String(data.get("description") ?? base.serving?.description ?? "1 serving") },
+      nutrition: {
+        ...(base.nutrition ?? {}),
+        calories: getNumber(data, "calories") ?? 0,
+        proteinG: getNumber(data, "proteinG"),
+        carbsG: getNumber(data, "carbsG"),
+        fatG: getNumber(data, "fatG"),
+        fiberG: getNumber(data, "fiberG"),
+        sugarG: getNumber(data, "sugarG"),
+        addedSugarG: getNumber(data, "addedSugarG"),
+        saturatedFatG: getNumber(data, "saturatedFatG"),
+        sodiumMg: getNumber(data, "sodiumMg"),
+      },
+      recipe: recipeEnabled ? { ingredients, instructions: String(data.get("instructions") ?? base.recipe?.instructions ?? "") || null } : null,
+    };
+  }
+
+  private async askFoodAi(): Promise<void> {
+    if (this.modal?.kind !== "food") return;
+    const current = this.modal;
+    const draft = this.captureFoodDraft();
+    try {
+      await this.writeClipboard(buildFoodAiPrompt(this.state, draft));
+      this.modal = { ...current, draft, aiMessage: "AI prompt copied — paste it into ChatGPT.", aiError: undefined };
+    } catch {
+      this.modal = { ...current, draft, aiMessage: undefined, aiError: "Could not copy automatically. Your browser may block clipboard access." };
+    }
+    this.render();
+  }
+
+  private async applyFoodClipboard(): Promise<void> {
+    if (this.modal?.kind !== "food") return;
+    const current = this.modal;
+    const draft = this.captureFoodDraft();
+    try {
+      const raw = await navigator.clipboard.readText();
+      this.applyFoodImport(raw, draft);
+    } catch {
+      this.modal = { ...current, draft, aiMessage: undefined, aiError: "Clipboard access was denied. Expand ‘Paste AI response manually’ below." };
+      this.render();
+    }
+  }
+
+  private applyFoodImport(raw: string, current = this.captureFoodDraft()): void {
+    if (this.modal?.kind !== "food") return;
+    const modal = this.modal;
+    try {
+      const draft = importFoodDraft(current, raw);
+      this.modal = { ...modal, draft, aiMessage: "AI response applied to the form. Review it, then save when ready.", aiError: undefined };
+    } catch (error) {
+      this.modal = { ...modal, draft: current, aiMessage: undefined, aiError: error instanceof Error ? error.message : "Could not apply that AI response." };
+    }
+    this.render();
+  }
+
+  private async writeClipboard(value: string): Promise<void> {
+    if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(value);
+    const area = document.createElement("textarea");
+    area.value = value;
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.append(area);
+    area.select();
+    const copied = document.execCommand("copy");
+    area.remove();
+    if (!copied) throw new Error("Clipboard unavailable");
+  }
+
+  private async copy(value: string, message: string): Promise<void> { await this.writeClipboard(value); this.showToast(message); }
   private download(): void { const url = URL.createObjectURL(new Blob([exportBackup(this.state)], { type: "application/json" })); const link = document.createElement("a"); link.href = url; link.download = `aifoodpal-backup-${this.state.prefs.date}.json`; link.click(); URL.revokeObjectURL(url); }
   private showToast(message: string): void { requestAnimationFrame(() => { const toast = this.root.querySelector("#toast"); if (!toast) return; toast.textContent = message; toast.classList.add("show"); clearTimeout(this.toastTimer); this.toastTimer = window.setTimeout(() => toast.classList.remove("show"), 2200); }); }
 }

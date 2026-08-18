@@ -31,6 +31,7 @@ export const migrateState = (value: unknown): AppState => {
           ...entry,
           period: normalizePeriod(entry.period),
           nutritionSnapshot: normalizeNutrition(entry.nutritionSnapshot),
+          recipeSnapshot: entry.recipeSnapshot ?? null,
         }))
       : [],
     weights: Array.isArray(input.weights) ? input.weights : [],

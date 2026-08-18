@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { applyAiResponse, buildAiPrompt, parseAiResponse } from "../src/ai";
-import { createEntry, createState, normalizeFood } from "../src/model";
+import { applyAiResponse, buildAiPrompt, buildFoodAiPrompt, importFoodDraft, parseAiResponse } from "../src/ai";
+import { createEntry, createQuickCalorieEntry, createState, normalizeFood } from "../src/model";
 import { calorieGuidance, nutritionTargets, totalsFor } from "../src/nutrition";
 import { exportBackup, parseBackup } from "../src/storage";
 
@@ -40,6 +40,27 @@ describe("nutrition domain", () => {
     expect(totalsFor(state, state.prefs.date).calories).toBe(250);
     expect(food.nutrition.calories).toBe(100);
   });
+
+  it("logs quick calories without inventing macro values", () => {
+    const state = readyState();
+    const entry = createQuickCalorieEntry(80, state.prefs.date, "snacks");
+    state.entries.push(entry);
+    expect(entry.nutritionSnapshot).toMatchObject({ calories: 80, proteinG: null, carbsG: null, fatG: null });
+    expect(totalsFor(state, state.prefs.date).calories).toBe(80);
+  });
+
+  it("snapshots a recipe as one expandable diary entry", () => {
+    const food = normalizeFood({
+      name: "Taco bowls",
+      nutrition: { calories: 510, proteinG: 28, carbsG: 58, fatG: 18 },
+      recipe: { ingredients: [{ name: "Black beans", amount: 1, unit: "cup", nutrition: { calories: 220, proteinG: 14 } }], instructions: "Assemble the bowls." },
+    });
+    const entry = createEntry(food, "2026-08-17", "dinner");
+    food.recipe!.ingredients[0]!.name = "Changed later";
+    expect(entry.foodId).toBe(food.id);
+    expect(entry.recipeSnapshot?.ingredients[0]?.name).toBe("Black beans");
+    expect(entry.recipeSnapshot?.instructions).toBe("Assemble the bowls.");
+  });
 });
 
 describe("portable storage", () => {
@@ -62,6 +83,32 @@ describe("AI bridge", () => {
     expect(prompt).toContain("CURRENT CONTEXT");
     expect(prompt).toContain("Log oatmeal for breakfast");
     expect(prompt).toContain("Return ONLY valid JSON");
+  });
+
+  it("builds a food-only prompt with partial recipe context", () => {
+    const prompt = buildFoodAiPrompt(readyState(), { name: "Taco bowls", recipe: { ingredients: [{ name: "rice" }] } });
+    expect(prompt).toContain("PARTIAL FOOD");
+    expect(prompt).toContain("Taco bowls");
+    expect(prompt).toContain("one food");
+    expect(prompt).toContain("ONE serving");
+  });
+
+  it("fills a draft from upsertFood while preserving omitted user values", () => {
+    const current = { name: "Taco bowls", brand: "Home", nutrition: { calories: 0, sodiumMg: 400 }, recipe: { ingredients: [{ name: "rice" }] } };
+    const merged = importFoodDraft(current, JSON.stringify({
+      schemaVersion: 1,
+      operations: [{ type: "upsertFood", food: { nutrition: { calories: 520, proteinG: 26 }, recipe: { ingredients: [{ name: "rice" }, { name: "beans" }], instructions: "Combine." } } }],
+    }));
+    expect(merged.name).toBe("Taco bowls");
+    expect(merged.brand).toBe("Home");
+    expect(merged.nutrition).toMatchObject({ calories: 520, proteinG: 26, sodiumMg: 400 });
+    expect(merged.recipe?.ingredients).toHaveLength(2);
+  });
+
+  it("gives useful food-import errors", () => {
+    expect(() => importFoodDraft({}, "not json")).toThrow(/not valid JSON/i);
+    expect(() => importFoodDraft({}, '{"schemaVersion":2,"operations":[]}')).toThrow(/not supported/i);
+    expect(() => importFoodDraft({}, '{"schemaVersion":1,"operations":[]}')).toThrow(/upsertFood/i);
   });
 
   it("validates and applies food, entry, weight, and goal operations", () => {

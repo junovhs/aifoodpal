@@ -10,9 +10,9 @@ export type Confidence = "high" | "medium" | "low";
 
 export interface Nutrition {
   calories: number;
-  proteinG: number;
-  carbsG: number;
-  fatG: number;
+  proteinG: number | null;
+  carbsG: number | null;
+  fatG: number | null;
   fiberG: number | null;
   sugarG: number | null;
   addedSugarG: number | null;
@@ -27,6 +27,24 @@ export interface Serving {
   description: string;
 }
 
+export interface RecipeIngredient {
+  id: string;
+  name: string;
+  amount: number | null;
+  unit: string;
+  nutrition: {
+    calories: number | null;
+    proteinG: number | null;
+    carbsG: number | null;
+    fatG: number | null;
+  };
+}
+
+export interface Recipe {
+  ingredients: RecipeIngredient[];
+  instructions: string | null;
+}
+
 export interface Food {
   id: string;
   name: string;
@@ -36,6 +54,7 @@ export interface Food {
   sourceType: SourceType;
   confidence: Confidence;
   notes: string | null;
+  recipe: Recipe | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -50,6 +69,7 @@ export interface Entry {
   brandSnapshot: string | null;
   servingSnapshot: Serving;
   nutritionSnapshot: Nutrition;
+  recipeSnapshot: Recipe | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -98,9 +118,10 @@ export interface AppState {
   prefs: { date: string };
 }
 
-export type FoodInput = Partial<Omit<Food, "serving" | "nutrition">> & {
+export type FoodInput = Partial<Omit<Food, "serving" | "nutrition" | "recipe">> & {
   serving?: Partial<Serving>;
   nutrition?: Partial<Nutrition> & { satFatG?: number | null };
+  recipe?: { ingredients?: Array<Partial<Omit<RecipeIngredient, "nutrition">> & { nutrition?: Partial<RecipeIngredient["nutrition"]> }>; instructions?: string | null } | null;
 };
 
 export const isoDate = (date = new Date()): string => {
@@ -124,6 +145,9 @@ const positiveNumber = (value: unknown, fallback = 0): number => {
   return Number.isFinite(number) ? Math.max(0, number) : fallback;
 };
 
+const macroNumber = (value: unknown): number | null =>
+  value === null ? null : positiveNumber(value);
+
 export const emptyNutrition = (): Nutrition => ({
   calories: 0,
   proteinG: 0,
@@ -139,9 +163,9 @@ export const emptyNutrition = (): Nutrition => ({
 
 export const normalizeNutrition = (input: Partial<Nutrition> & { satFatG?: number | null } = {}): Nutrition => ({
   calories: positiveNumber(input.calories),
-  proteinG: positiveNumber(input.proteinG),
-  carbsG: positiveNumber(input.carbsG),
-  fatG: positiveNumber(input.fatG),
+  proteinG: macroNumber(input.proteinG),
+  carbsG: macroNumber(input.carbsG),
+  fatG: macroNumber(input.fatG),
   fiberG: optionalNumber(input.fiberG),
   sugarG: optionalNumber(input.sugarG),
   addedSugarG: optionalNumber(input.addedSugarG),
@@ -149,6 +173,25 @@ export const normalizeNutrition = (input: Partial<Nutrition> & { satFatG?: numbe
   transFatG: optionalNumber(input.transFatG),
   sodiumMg: optionalNumber(input.sodiumMg),
 });
+
+const normalizeRecipe = (input: FoodInput["recipe"]): Recipe | null => {
+  if (!input) return null;
+  return {
+    ingredients: (input.ingredients ?? []).map((ingredient) => ({
+      id: ingredient.id ?? uid("ingredient"),
+      name: String(ingredient.name ?? "").trim(),
+      amount: optionalNumber(ingredient.amount),
+      unit: String(ingredient.unit ?? "").trim(),
+      nutrition: {
+        calories: optionalNumber(ingredient.nutrition?.calories),
+        proteinG: optionalNumber(ingredient.nutrition?.proteinG),
+        carbsG: optionalNumber(ingredient.nutrition?.carbsG),
+        fatG: optionalNumber(ingredient.nutrition?.fatG),
+      },
+    })).filter((ingredient) => ingredient.name),
+    instructions: input.instructions ? String(input.instructions).trim() : null,
+  };
+};
 
 export const normalizePeriod = (value: unknown): Period => {
   const aliases: Record<string, Period> = {
@@ -182,6 +225,7 @@ export const normalizeFood = (input: FoodInput = {}): Food => {
     sourceType: sourceTypes.includes(input.sourceType as SourceType) ? (input.sourceType as SourceType) : "estimate",
     confidence: confidences.includes(input.confidence as Confidence) ? (input.confidence as Confidence) : "medium",
     notes: input.notes ? String(input.notes) : null,
+    recipe: normalizeRecipe(input.recipe),
     createdAt: input.createdAt ?? now,
     updatedAt: now,
   };
@@ -199,6 +243,37 @@ export const createEntry = (food: Food, date: string, period: Period, servings =
     brandSnapshot: food.brand,
     servingSnapshot: { ...food.serving },
     nutritionSnapshot: { ...food.nutrition },
+    recipeSnapshot: food.recipe ? structuredClone(food.recipe) : null,
+    createdAt: now,
+    updatedAt: now,
+  };
+};
+
+export const createQuickCalorieEntry = (calories: number, date: string, period: Period): Entry => {
+  const now = new Date().toISOString();
+  const amount = Math.max(1, Math.round(calories));
+  return {
+    id: uid("entry"),
+    foodId: "quick-calories",
+    date,
+    period,
+    servings: 1,
+    nameSnapshot: "Quick calories",
+    brandSnapshot: null,
+    servingSnapshot: { amount: 1, unit: "entry", description: "calorie estimate" },
+    nutritionSnapshot: {
+      calories: amount,
+      proteinG: null,
+      carbsG: null,
+      fatG: null,
+      fiberG: null,
+      sugarG: null,
+      addedSugarG: null,
+      saturatedFatG: null,
+      transFatG: null,
+      sodiumMg: null,
+    },
+    recipeSnapshot: null,
     createdAt: now,
     updatedAt: now,
   };
