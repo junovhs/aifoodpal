@@ -1,0 +1,84 @@
+import { describe, expect, it } from "vitest";
+import { applyAiResponse, buildAiPrompt, parseAiResponse } from "../src/ai";
+import { createEntry, createState, normalizeFood } from "../src/model";
+import { calorieGuidance, nutritionTargets, totalsFor } from "../src/nutrition";
+import { exportBackup, parseBackup } from "../src/storage";
+
+const readyState = () => {
+  const state = createState("2026-08-17");
+  Object.assign(state.profile, {
+    onboardingComplete: true,
+    age: 35,
+    sexForEquation: "female",
+    heightIn: 66,
+    weightLb: 180,
+    goalWeightLb: 155,
+    activityPAL: 1.6,
+    goalType: "lose",
+    rateLbWeek: 1,
+  });
+  return state;
+};
+
+describe("nutrition domain", () => {
+  it("calculates a bounded energy guide and coherent macro targets", () => {
+    const state = readyState();
+    const guidance = calorieGuidance(state.profile);
+    const targets = nutritionTargets(state.profile);
+    expect(guidance.ok).toBe(true);
+    expect(guidance.target).toBeGreaterThanOrEqual(1000);
+    expect(targets?.proteinG).toBeGreaterThan(0);
+    expect(targets?.carbsG).toBeGreaterThan(0);
+    expect(targets?.fatG).toBeGreaterThan(0);
+  });
+
+  it("multiplies snapshot nutrition without changing the library food", () => {
+    const state = readyState();
+    const food = normalizeFood({ name: "Toast", nutrition: { calories: 100, proteinG: 4, carbsG: 18, fatG: 2 } });
+    state.foods.push(food);
+    state.entries.push(createEntry(food, state.prefs.date, "breakfast", 2.5));
+    expect(totalsFor(state, state.prefs.date).calories).toBe(250);
+    expect(food.nutrition.calories).toBe(100);
+  });
+});
+
+describe("portable storage", () => {
+  it("round-trips an exported backup and preserves null nutrients", () => {
+    const state = readyState();
+    state.foods.push(normalizeFood({ name: "Soup", nutrition: { calories: 220, proteinG: 8, carbsG: 30, fatG: 7, sodiumMg: null } }));
+    const restored = parseBackup(exportBackup(state));
+    expect(restored.profile.goalWeightLb).toBe(155);
+    expect(restored.foods[0]?.nutrition.sodiumMg).toBeNull();
+  });
+
+  it("rejects incompatible schema versions", () => {
+    expect(() => parseBackup('{"schemaVersion":99}')).toThrow(/schema version/i);
+  });
+});
+
+describe("AI bridge", () => {
+  it("builds a self-contained clipboard packet without making a network call", () => {
+    const prompt = buildAiPrompt(readyState(), "Log oatmeal for breakfast");
+    expect(prompt).toContain("CURRENT CONTEXT");
+    expect(prompt).toContain("Log oatmeal for breakfast");
+    expect(prompt).toContain("Return ONLY valid JSON");
+  });
+
+  it("validates and applies food, entry, weight, and goal operations", () => {
+    const response = parseAiResponse(JSON.stringify({
+      schemaVersion: 1,
+      summary: "Breakfast and check-in",
+      operations: [
+        { type: "addEntry", entry: { period: "morning", servings: 1, food: { name: "Oatmeal", nutrition: { calories: 180, proteinG: 6, carbsG: 32, fatG: 3 } } } },
+        { type: "addWeight", date: "2026-08-17", weightLb: 178.5 },
+        { type: "setGoal", goalType: "lose", goalWeightLb: 150, rateLbWeek: 0.5 },
+      ],
+    }));
+    const result = applyAiResponse(readyState(), response);
+    expect(result.applied).toBe(3);
+    expect(result.state.foods[0]?.name).toBe("Oatmeal");
+    expect(result.state.entries[0]?.period).toBe("breakfast");
+    expect(result.state.profile.weightLb).toBe(178.5);
+    expect(result.state.profile.goalWeightLb).toBe(150);
+  });
+});

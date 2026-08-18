@@ -1,0 +1,9 @@
+node_modules/
+dist/
+coverage/
+*.local
+*.tsbuildinfo
+
+# semmap artifacts (regenerable, not committed - DEC-10)
+SEMMAP.md
+.semmap/
