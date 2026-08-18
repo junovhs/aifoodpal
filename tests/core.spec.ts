@@ -3,6 +3,7 @@ import { applyAiResponse, buildAiPrompt, buildFoodAiPrompt, importFoodDraft, par
 import { createEntry, createQuickCalorieEntry, createState, normalizeFood, removeFoodFromLibrary } from "../src/model";
 import { calorieGuidance, nutritionTargets, totalsFor } from "../src/nutrition";
 import { exportBackup, parseBackup } from "../src/storage";
+import { calendarGrid, formatMonth, shiftMonth } from "../src/calendar";
 
 const readyState = () => {
   const state = createState("2026-08-17");
@@ -86,6 +87,21 @@ describe("portable storage", () => {
 
   it("rejects incompatible schema versions", () => {
     expect(() => parseBackup('{"schemaVersion":99}')).toThrow(/schema version/i);
+  });
+});
+
+describe("calendar history", () => {
+  it("builds a stable six-week month grid with adjacent dates", () => {
+    const days = calendarGrid("2026-08");
+    expect(days).toHaveLength(42);
+    expect(days[0]).toMatchObject({ date: "2026-07-26", inMonth: false });
+    expect(days.find((day) => day.date === "2026-08-17")).toMatchObject({ day: 17, inMonth: true });
+  });
+
+  it("moves across year boundaries and formats the selected month", () => {
+    expect(shiftMonth("2026-12", 1)).toBe("2027-01");
+    expect(shiftMonth("2026-01", -1)).toBe("2025-12");
+    expect(formatMonth("2026-08")).toMatch(/August 2026/);
   });
 });
 

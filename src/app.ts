@@ -3,8 +3,9 @@ import { createEntry, createQuickCalorieEntry, normalizeFood, normalizePeriod, P
 import { calorieGuidance, dailyCalorieGuide, formatDate, kgToPounds, latestWeight, nutritionTargets, poundsToKg, round, shiftDate, totalsFor } from "./nutrition";
 import { exportBackup, parseBackup, type StateRepository } from "./storage";
 import { icon, renderIcons } from "./icons";
+import { calendarGrid, formatMonth, shiftMonth } from "./calendar";
 
-type View = "day" | "library" | "trend" | "settings";
+type View = "day" | "calendar" | "library" | "trend" | "settings";
 type FoodModal = { kind: "food"; food?: Food; draft?: FoodInput; aiMessage?: string; aiError?: string };
 type Modal = FoodModal | { kind: "quick"; calories: number; period: Period } | { kind: "choose"; period?: Period } | { kind: "log"; food: Food; period?: Period } | { kind: "delete-food"; food: Food } | { kind: "weight" } | { kind: "backup" } | { kind: "ai"; stage: "request" | "prompt" | "reply" | "preview"; prompt?: string; response?: AiResponse } | null;
 
@@ -16,11 +17,13 @@ const getNumber = (data: FormData, key: string): number | null => { const value 
 export class DaybookApp {
   private state: AppState;
   private view: View = "day";
+  private calendarMonth: string;
   private modal: Modal = null;
   private toastTimer?: number;
 
   constructor(private readonly root: HTMLElement, private readonly repository: StateRepository) {
     this.state = repository.load();
+    this.calendarMonth = this.state.prefs.date.slice(0, 7);
   }
 
   start(): void {
@@ -44,16 +47,33 @@ export class DaybookApp {
   }
 
   private nav(bottom = false): string {
-    const items: [View, string, Parameters<typeof icon>[0]][] = [["day", "Today", "CalendarDays"], ["library", "Library", "BookOpen"], ["trend", "Progress", "ChartNoAxesColumnIncreasing"], ["settings", "Settings", "Settings"]];
+    const items: [View, string, Parameters<typeof icon>[0]][] = [["day", "Today", "CalendarDays"], ["calendar", "History", "CalendarRange"], ["library", "Library", "BookOpen"], ["trend", "Progress", "ChartNoAxesColumnIncreasing"], ["settings", "Settings", "Settings"]];
     const buttons = items.map(([id, label, glyph]) => `<button class="nav ${this.view === id ? "active" : ""}" data-action="view" data-view="${id}">${icon(glyph)}<span>${label}</span></button>`).join("");
     return bottom ? `<nav class="bottom">${buttons}</nav>` : `<nav class="sidenav">${buttons}</nav>`;
   }
 
   private content(): string {
+    if (this.view === "calendar") return this.calendar();
     if (this.view === "library") return this.library();
     if (this.view === "trend") return this.trend();
     if (this.view === "settings") return this.settings();
     return this.day();
+  }
+
+  private calendar(): string {
+    const today = new Date().toISOString().slice(0, 10);
+    const days = calendarGrid(this.calendarMonth);
+    const monthEntries = this.state.entries.filter((entry) => entry.date.startsWith(this.calendarMonth));
+    const activeDays = new Set(monthEntries.map((entry) => entry.date)).size;
+    const monthCalories = days.filter((day) => day.inMonth).reduce((sum, day) => sum + totalsFor(this.state, day.date).calories, 0);
+    const average = activeDays ? monthCalories / activeDays : 0;
+    const cells = days.map((day) => {
+      const entries = this.state.entries.filter((entry) => entry.date === day.date);
+      const totals = totalsFor(this.state, day.date);
+      const classes = ["calendar-day", day.inMonth ? "" : "outside", entries.length ? "has-history" : "", day.date === today ? "today" : "", day.date === this.state.prefs.date ? "selected" : ""].filter(Boolean).join(" ");
+      return `<button class="${classes}" data-action="open-calendar-day" data-date="${day.date}" aria-label="Open ${formatDate(day.date)}${entries.length ? `, ${entries.length} entries, ${fmt(totals.calories)} calories` : ""}"><span class="calendar-number">${day.day}</span>${entries.length ? `<span class="calendar-kcal">${fmt(totals.calories)} <small>kcal</small></span><span class="calendar-count">${entries.length} ${entries.length === 1 ? "entry" : "entries"}</span>` : `<span class="calendar-empty">—</span>`}</button>`;
+    }).join("");
+    return `<div class="head calendar-head"><div><span class="eyebrow">Saved diary</span><h1 class="title">Calendar history</h1><p class="subtitle">Every logged day stays available on this device.</p></div><div class="calendar-controls"><button class="icon-btn" data-action="calendar-month" data-months="-1" aria-label="Previous month">${icon("ChevronLeft")}</button><button class="today-btn" data-action="calendar-today">Today</button><button class="icon-btn" data-action="calendar-month" data-months="1" aria-label="Next month">${icon("ChevronRight")}</button></div></div><section class="calendar-layout"><div class="calendar-card card"><div class="calendar-month-title"><strong>${formatMonth(this.calendarMonth)}</strong><span>${activeDays} active ${activeDays === 1 ? "day" : "days"}</span></div><div class="calendar-weekdays">${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day) => `<span>${day}</span>`).join("")}</div><div class="calendar-grid">${cells}</div></div><aside class="history-summary"><span class="history-summary-icon">${icon("CalendarRange")}</span><span class="eyebrow">This month</span><strong>${fmt(monthCalories)}</strong><span>calories logged</span><div class="history-stat"><b>${monthEntries.length}</b><span>entries</span></div><div class="history-stat"><b>${fmt(average)}</b><span>avg kcal / active day</span></div><p>Select any day to open its complete diary.</p></aside></section>`;
   }
 
   private day(): string {
@@ -168,9 +188,12 @@ export class DaybookApp {
     const button = (event.target as Element).closest<HTMLElement>("[data-action]");
     if (!button) return;
     const action = button.dataset.action;
-    if (action === "view") { this.view = button.dataset.view as View; this.render(); }
+    if (action === "view") { this.view = button.dataset.view as View; if (this.view === "calendar") this.calendarMonth = this.state.prefs.date.slice(0, 7); this.render(); }
     if (action === "date") { this.state.prefs.date = shiftDate(this.state.prefs.date, Number(button.dataset.days)); this.save(); }
     if (action === "today") { this.state.prefs.date = new Date().toISOString().slice(0, 10); this.save(); }
+    if (action === "calendar-month") { this.calendarMonth = shiftMonth(this.calendarMonth, Number(button.dataset.months)); this.render(); }
+    if (action === "calendar-today") { this.calendarMonth = new Date().toISOString().slice(0, 7); this.render(); }
+    if (action === "open-calendar-day") { this.state.prefs.date = String(button.dataset.date); this.calendarMonth = this.state.prefs.date.slice(0, 7); this.view = "day"; this.save(); }
     if (action === "close" || action === "backdrop" && event.target === button) { this.modal = null; this.render(); }
     if (action === "new-food") { this.modal = { kind: "food" }; this.render(); }
     if (action === "edit-food") { const food = this.food(button.dataset.id); if (food) { this.modal = { kind: "food", food }; this.render(); } }
