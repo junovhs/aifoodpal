@@ -154,6 +154,7 @@ button:active { transform: translateY(1px); }
 .mealempty .icon { width: 15px; height: 15px; }
 
 .head { display: flex; justify-content: space-between; gap: 18px; align-items: flex-start; margin-bottom: 22px; }
+.head-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .title { margin: 0; font: 500 30px/1.1 Georgia, "Times New Roman", serif; letter-spacing: -.035em; }
 .subtitle { margin: 7px 0 0; color: var(--muted); font-size: 12px; }
 .section { margin: 28px 0; }
@@ -257,6 +258,23 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); backgro
 .ingredient-main { display: grid; grid-template-columns: minmax(140px, 2fr) 1fr 1fr; gap: 8px; }
 .ingredient-macros { margin-top: 9px; }
 .ingredient-macros .four { display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px; margin-top: 8px; }
+.measurement-note { margin-top: 10px; color: var(--muted); font-size: 9px; line-height: 1.5; }
+
+.combo-list { display: grid; gap: 8px; margin-top: 14px; }
+.combo-row { position: relative; display: grid; grid-template-columns: 30px minmax(0, 1fr) minmax(160px, .75fr); align-items: center; gap: 10px; padding: 11px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); transition: border-color .15s, background .15s, box-shadow .15s; }
+.combo-row:hover { border-color: color-mix(in oklch, var(--accent) 32%, var(--line)); }
+.combo-row:has(input[name="comboFood"]:checked) { border-color: var(--accent); background: color-mix(in oklch, var(--accent-soft) 52%, var(--panel)); box-shadow: 0 0 0 2px color-mix(in oklch, var(--accent-soft) 65%, transparent); }
+.combo-select { grid-column: 1 / 3; display: grid; grid-template-columns: 30px minmax(0, 1fr); align-items: center; gap: 10px; cursor: pointer; }
+.combo-select > input { position: absolute; opacity: 0; pointer-events: none; }
+.combo-check { display: grid; place-items: center; width: 25px; height: 25px; border: 1px solid var(--edge); border-radius: 8px; color: transparent; background: var(--panel-muted); }
+.combo-check .icon { width: 14px; height: 14px; }
+.combo-row:has(input[name="comboFood"]:checked) .combo-check { border-color: var(--accent); background: var(--accent); color: white; }
+.combo-info { display: grid; gap: 3px; min-width: 0; }
+.combo-info strong { overflow: hidden; text-overflow: ellipsis; font-size: 12px; white-space: nowrap; }
+.combo-info small { color: var(--muted); font-size: 9px; }
+.combo-quantity { display: grid; grid-template-columns: minmax(60px, .7fr) minmax(80px, 1fr); gap: 6px; }
+.combo-quantity input { min-height: 36px; }
+.combo-error { margin-top: 10px; }
 
 .quick-picker { padding: 20px; border: 1px solid color-mix(in oklch, var(--accent) 24%, var(--line)); border-radius: var(--radius-lg); background: radial-gradient(circle at 50% 20%, var(--accent-soft), transparent 70%), var(--panel); box-shadow: inset 0 1px 0 white, var(--shadow-md); }
 .quick-screen { display: flex; align-items: baseline; justify-content: center; gap: 8px; margin: 4px auto 19px; }
@@ -311,6 +329,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); backgro
   .quick-increments { grid-template-columns: repeat(3, 1fr); }
   .period-picker { grid-template-columns: repeat(2, 1fr); }
   .ingredient-main, .ingredient-macros .four { grid-template-columns: repeat(2, 1fr); }
+  .head-actions { gap: 5px; }.head-actions .btn, .head-actions .btn-primary { min-height: 38px; padding-inline: 10px; }
+  .combo-row { grid-template-columns: 28px minmax(0, 1fr); }.combo-select { grid-column: 1 / 3; grid-template-columns: 28px minmax(0, 1fr); }.combo-quantity { grid-column: 2; }
   .library-actions { gap: 3px; }.library-actions .tiny-btn span { display: none; }.library-actions .tiny-btn { width: 32px; padding: 0; }
   .calendar-head { align-items: center; }.calendar-head .subtitle { display: none; }
   .calendar-layout { grid-template-columns: 1fr; }.history-summary { min-height: 0; }

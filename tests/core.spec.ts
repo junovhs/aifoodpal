@@ -4,6 +4,8 @@ import { createEntry, createQuickCalorieEntry, createState, normalizeFood, remov
 import { calorieGuidance, nutritionTargets, totalsFor } from "../src/nutrition";
 import { exportBackup, parseBackup } from "../src/storage";
 import { calendarGrid, formatMonth, shiftMonth } from "../src/calendar";
+import { createComboFood } from "../src/combos";
+import { convertAmount, normalizeUnit, servingMultiplier, splitTrailingQuantity } from "../src/units";
 
 const readyState = () => {
   const state = createState("2026-08-17");
@@ -73,6 +75,43 @@ describe("nutrition domain", () => {
     expect(state.entries).toHaveLength(1);
     expect(state.entries[0]?.nameSnapshot).toBe("Archived soup");
     expect(removeFoodFromLibrary(state, food.id)).toBe(false);
+  });
+});
+
+describe("portions and saved combos", () => {
+  it("normalizes kitchen aliases and converts only compatible dimensions", () => {
+    expect(normalizeUnit("Tablespoons")).toBe("tbsp");
+    expect(convertAmount(1, "cup", "tbsp")).toBeCloseTo(16);
+    expect(convertAmount(100, "g", "oz")).toBeCloseTo(3.5274);
+    expect(servingMultiplier(2, "tbsp", { amount: 1, unit: "tbsp" })).toBe(2);
+    expect(() => convertAmount(2, "tbsp", "g")).toThrow(/cannot convert/i);
+    expect(() => convertAmount(1, "slice", "container")).toThrow(/cannot convert/i);
+    expect(splitTrailingQuantity("Cream cheese, 2 tablespoons")).toEqual({ name: "Cream cheese", amount: 2, unit: "tbsp" });
+    expect(normalizeFood({ name: "Cream cheese, 2 tbsp", nutrition: { calories: 100 } })).toMatchObject({ name: "Cream cheese", serving: { amount: 2, unit: "tbsp", description: "2 tbsp" } });
+  });
+
+  it("saves selected food portions as one expandable reusable combo", () => {
+    const bagel = normalizeFood({
+      name: "WinCo cheddar jalapeño bagel, top half",
+      serving: { amount: 1, unit: "piece" },
+      nutrition: { calories: 170, proteinG: 6, carbsG: 29, fatG: 3 },
+    });
+    const creamCheese = normalizeFood({
+      name: "Cream cheese",
+      serving: { amount: 1, unit: "tbsp" },
+      nutrition: { calories: 50, proteinG: 1, carbsG: 1, fatG: 5 },
+    });
+    const combo = createComboFood("Bagel + cream cheese", [
+      { food: bagel, amount: 1, unit: "piece" },
+      { food: creamCheese, amount: 2, unit: "tablespoons" },
+    ]);
+    const entry = createEntry(combo, "2026-08-18", "breakfast");
+
+    expect(combo.nutrition).toMatchObject({ calories: 270, proteinG: 8, carbsG: 31, fatG: 13 });
+    expect(combo.recipe?.ingredients).toHaveLength(2);
+    expect(combo.recipe?.ingredients[1]).toMatchObject({ foodId: creamCheese.id, name: "Cream cheese", amount: 2, unit: "tbsp", nutrition: { calories: 100 } });
+    expect(entry.nameSnapshot).toBe("Bagel + cream cheese");
+    expect(entry.recipeSnapshot?.ingredients[0]?.name).toContain("WinCo");
   });
 });
 

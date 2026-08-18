@@ -1,3 +1,5 @@
+import { formatQuantity, normalizeUnit, splitTrailingQuantity } from "./units";
+
 export const SCHEMA_VERSION = 1 as const;
 export const PERIODS = ["breakfast", "lunch", "dinner", "snacks"] as const;
 
@@ -29,6 +31,7 @@ export interface Serving {
 
 export interface RecipeIngredient {
   id: string;
+  foodId: string | null;
   name: string;
   amount: number | null;
   unit: string;
@@ -179,9 +182,10 @@ const normalizeRecipe = (input: FoodInput["recipe"]): Recipe | null => {
   return {
     ingredients: (input.ingredients ?? []).map((ingredient) => ({
       id: ingredient.id ?? uid("ingredient"),
+      foodId: ingredient.foodId ? String(ingredient.foodId) : null,
       name: String(ingredient.name ?? "").trim(),
       amount: optionalNumber(ingredient.amount),
-      unit: String(ingredient.unit ?? "").trim(),
+      unit: normalizeUnit(ingredient.unit, ""),
       nutrition: {
         calories: optionalNumber(ingredient.nutrition?.calories),
         proteinG: optionalNumber(ingredient.nutrition?.proteinG),
@@ -212,14 +216,20 @@ export const normalizeFood = (input: FoodInput = {}): Food => {
   const now = new Date().toISOString();
   const sourceTypes: SourceType[] = ["user", "label", "restaurant", "estimate"];
   const confidences: Confidence[] = ["high", "medium", "low"];
+  const rawName = String(input.name ?? "Untitled item").trim() || "Untitled item";
+  const extracted = (!input.serving || normalizeUnit(input.serving.unit) === "serving" && positiveNumber(input.serving.amount, 1) === 1)
+    ? splitTrailingQuantity(rawName)
+    : null;
+  const servingAmount = extracted?.amount ?? Math.max(0.0001, positiveNumber(input.serving?.amount, 1));
+  const servingUnit = extracted?.unit ?? normalizeUnit(input.serving?.unit);
   return {
     id: input.id ?? uid("food"),
-    name: String(input.name ?? "Untitled item").trim() || "Untitled item",
+    name: extracted?.name ?? rawName,
     brand: input.brand ? String(input.brand).trim() : null,
     serving: {
-      amount: Math.max(0.0001, positiveNumber(input.serving?.amount, 1)),
-      unit: String(input.serving?.unit ?? "serving"),
-      description: String(input.serving?.description ?? "1 serving"),
+      amount: servingAmount,
+      unit: servingUnit,
+      description: formatQuantity(servingAmount, servingUnit),
     },
     nutrition: normalizeNutrition(input.nutrition),
     sourceType: sourceTypes.includes(input.sourceType as SourceType) ? (input.sourceType as SourceType) : "estimate",

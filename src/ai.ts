@@ -35,6 +35,8 @@ Create or complete the food below as one upsertFood operation.
 
 Rules:
 - Nutrition represents ONE serving. Do not multiply values.
+- Food names contain only the food identity. Never put quantities such as "2 tbsp" or "100 g" in the name; put them in serving.amount and serving.unit.
+- Normalize common units to tsp, tbsp, fl oz, cup, ml, l, g, kg, oz, lb, serving, piece, slice, or container. A specific custom unit is allowed when needed.
 - Preserve every known value in PARTIAL FOOD unless you have an explicit replacement.
 - Unknown detailed nutrients must be null, never invented as 0.
 - Use 0 only when a nutrient is confidently zero.
@@ -88,6 +90,7 @@ The app owns arithmetic, totals, storage, dates, and quantity multiplication. In
 Rules:
 - Prefer an existing library food and exact food id when it clearly matches.
 - Nutrition always represents ONE serving. "servings" is the multiplier.
+- Keep food names free of quantities. Store amounts and units in serving or recipe ingredient fields.
 - Never delete anything.
 - Preserve known values unless the user asks to correct them.
 - Unknown detailed nutrients must be null, not 0.

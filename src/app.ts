@@ -4,15 +4,18 @@ import { calorieGuidance, dailyCalorieGuide, formatDate, kgToPounds, latestWeigh
 import { exportBackup, parseBackup, type StateRepository } from "./storage";
 import { icon, renderIcons } from "./icons";
 import { calendarGrid, formatMonth, shiftMonth } from "./calendar";
+import { createComboFood } from "./combos";
+import { formatQuantity, normalizeUnit, servingMultiplier, UNIT_OPTIONS } from "./units";
 
 type View = "day" | "calendar" | "library" | "trend" | "settings";
 type FoodModal = { kind: "food"; food?: Food; draft?: FoodInput; aiMessage?: string; aiError?: string };
-type Modal = FoodModal | { kind: "quick"; calories: number; period: Period } | { kind: "choose"; period?: Period } | { kind: "log"; food: Food; period?: Period } | { kind: "delete-food"; food: Food } | { kind: "weight" } | { kind: "backup" } | { kind: "ai"; stage: "request" | "prompt" | "reply" | "preview"; prompt?: string; response?: AiResponse } | null;
+type Modal = FoodModal | { kind: "combo"; error?: string } | { kind: "quick"; calories: number; period: Period } | { kind: "choose"; period?: Period } | { kind: "log"; food: Food; period?: Period } | { kind: "delete-food"; food: Food } | { kind: "weight" } | { kind: "backup" } | { kind: "ai"; stage: "request" | "prompt" | "reply" | "preview"; prompt?: string; response?: AiResponse } | null;
 
 const html = (value: unknown): string => String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;");
 const fmt = (value: number | null | undefined, digits = 0): string => value == null ? "?" : new Intl.NumberFormat(undefined, { maximumFractionDigits: digits }).format(value);
 const field = (label: string, name: string, value: unknown, type = "number", attrs = ""): string => `<label class="field"><span>${label}</span><input name="${name}" type="${type}" value="${html(value)}" ${attrs}></label>`;
 const getNumber = (data: FormData, key: string): number | null => { const value = data.get(key); if (value === null || value === "") return null; const number = Number(value); return Number.isFinite(number) ? number : null; };
+const measurementList = (): string => `<datalist id="measurement-units">${UNIT_OPTIONS.map((unit) => `<option value="${unit.value}">${unit.label}</option>`).join("")}</datalist>`;
 
 export class DaybookApp {
   private state: AppState;
@@ -102,7 +105,8 @@ export class DaybookApp {
   }
 
   private entryHtml(entry: AppState["entries"][number]): string {
-    const summary = `<div class="food-icon ${entry.recipeSnapshot ? "recipe" : ""}">${icon(entry.recipeSnapshot ? "ChefHat" : "Utensils")}</div><div class="entrymain"><div class="ename">${html(entry.nameSnapshot)}${entry.recipeSnapshot ? `<span class="recipe-badge">Recipe</span>` : ""}</div><div class="esub">${html(entry.servingSnapshot.description)} × ${fmt(entry.servings, 2)}${entry.recipeSnapshot ? ` · ${entry.recipeSnapshot.ingredients.length} ingredients` : ""}</div></div><div class="entrymacro">${this.macroBar(entry.nutritionSnapshot.proteinG, entry.nutritionSnapshot.carbsG, entry.nutritionSnapshot.fatG)}</div><span class="ekcal">${fmt(entry.nutritionSnapshot.calories * entry.servings)} <small>kcal</small></span><button class="icon-btn danger" data-action="delete-entry" data-id="${entry.id}" aria-label="Remove ${html(entry.nameSnapshot)}">${icon("Trash2")}</button>`;
+    const loggedQuantity = formatQuantity(entry.servingSnapshot.amount * entry.servings, entry.servingSnapshot.unit);
+    const summary = `<div class="food-icon ${entry.recipeSnapshot ? "recipe" : ""}">${icon(entry.recipeSnapshot ? "ChefHat" : "Utensils")}</div><div class="entrymain"><div class="ename">${html(entry.nameSnapshot)}${entry.recipeSnapshot ? `<span class="recipe-badge">Recipe</span>` : ""}</div><div class="esub">${html(loggedQuantity)}${entry.recipeSnapshot ? ` · ${entry.recipeSnapshot.ingredients.length} components` : ""}</div></div><div class="entrymacro">${this.macroBar(entry.nutritionSnapshot.proteinG, entry.nutritionSnapshot.carbsG, entry.nutritionSnapshot.fatG)}</div><span class="ekcal">${fmt(entry.nutritionSnapshot.calories * entry.servings)} <small>kcal</small></span><button class="icon-btn danger" data-action="delete-entry" data-id="${entry.id}" aria-label="Remove ${html(entry.nameSnapshot)}">${icon("Trash2")}</button>`;
     if (!entry.recipeSnapshot) return `<div class="entry">${summary}</div>`;
     const ingredients = entry.recipeSnapshot.ingredients.map((ingredient) => {
       const amount = ingredient.amount == null ? "" : fmt(ingredient.amount * entry.servings, 2);
@@ -110,7 +114,7 @@ export class DaybookApp {
       const macros = [[nutrient.calories, "kcal"], [nutrient.proteinG, "p"], [nutrient.carbsG, "c"], [nutrient.fatG, "f"]].filter(([value]) => value !== null).map(([value, label]) => `${fmt((value as number) * entry.servings, 1)}${label}`).join(" · ");
       return `<li><span>${html([amount, ingredient.unit, ingredient.name].filter(Boolean).join(" "))}</span><span>${macros}</span></li>`;
     }).join("");
-    return `<details class="recipe-entry"><summary class="entry">${summary}</summary><div class="recipe-entry-body"><div class="recipe-caption">Ingredients for ${fmt(entry.servings, 2)} logged serving${entry.servings === 1 ? "" : "s"}</div><ul>${ingredients || "<li><span>No ingredients listed</span></li>"}</ul>${entry.recipeSnapshot.instructions ? `<div class="recipe-instructions"><strong>Instructions</strong><p>${html(entry.recipeSnapshot.instructions).replaceAll("\n", "<br>")}</p></div>` : ""}</div></details>`;
+    return `<details class="recipe-entry"><summary class="entry">${summary}</summary><div class="recipe-entry-body"><div class="recipe-caption">Components for ${html(loggedQuantity)}</div><ul>${ingredients || "<li><span>No ingredients listed</span></li>"}</ul>${entry.recipeSnapshot.instructions ? `<div class="recipe-instructions"><strong>Instructions</strong><p>${html(entry.recipeSnapshot.instructions).replaceAll("\n", "<br>")}</p></div>` : ""}</div></details>`;
   }
 
   private macroBar(protein: number | null, carbs: number | null, fat: number | null): string {
@@ -120,7 +124,7 @@ export class DaybookApp {
 
   private library(): string {
     const cards = [...this.state.foods].sort((a, b) => a.name.localeCompare(b.name)).map((food) => `<div class="library-card"><div class="library-symbol">${icon(food.recipe ? "ChefHat" : "Utensils")}</div><div class="grow"><div class="library-name">${html(food.name)}${food.recipe ? `<span class="recipe-badge">Recipe</span>` : ""}</div><div class="tiny">${html(food.brand || food.serving.description)} · ${fmt(food.nutrition.calories)} kcal${food.recipe ? ` · ${food.recipe.ingredients.length} ingredients` : ""}</div></div><div class="row library-actions"><button class="tiny-btn btn-icon" data-action="log" data-id="${food.id}">${icon("Plus")}<span>Log</span></button><button class="icon-btn subtle" data-action="edit-food" data-id="${food.id}" aria-label="Edit ${html(food.name)}">${icon("Pencil")}</button><button class="icon-btn danger" data-action="request-delete-food" data-id="${food.id}" aria-label="Delete ${html(food.name)} from library">${icon("Trash2")}</button></div></div>`).join("");
-    return `<div class="head"><div><span class="eyebrow">Saved foods</span><h1 class="title">Food library</h1><p class="subtitle">Reusable nutrition records, ready for your next meal.</p></div><button class="btn-primary btn-icon" data-action="new-food">${icon("Plus")}<span>New food</span></button></div>${cards || `<div class="empty empty-rich"><span class="empty-icon">${icon("BookOpen")}</span><strong>Your library is ready</strong><span>Create a food here, or ask an AI to structure your first meal.</span><button class="btn-primary btn-icon" data-action="new-food">${icon("Plus")}<span>Create food</span></button></div>`}`;
+    return `<div class="head"><div><span class="eyebrow">Saved foods</span><h1 class="title">Food library</h1><p class="subtitle">Reusable foods and portions, ready for your next meal.</p></div><div class="head-actions"><button class="btn btn-icon" data-action="build-combo" ${this.state.foods.length < 2 ? "disabled" : ""}>${icon("ListPlus")}<span>Build combo</span></button><button class="btn-primary btn-icon" data-action="new-food">${icon("Plus")}<span>New food</span></button></div></div>${cards || `<div class="empty empty-rich"><span class="empty-icon">${icon("BookOpen")}</span><strong>Your library is ready</strong><span>Create a food here, or ask an AI to structure your first meal.</span><button class="btn-primary btn-icon" data-action="new-food">${icon("Plus")}<span>Create food</span></button></div>`}`;
   }
 
   private trend(): string {
@@ -145,6 +149,7 @@ export class DaybookApp {
     if (!this.modal) return "";
     let body = "";
     if (this.modal.kind === "food") body = this.foodForm(this.modal);
+    if (this.modal.kind === "combo") body = this.comboForm(this.modal.error);
     if (this.modal.kind === "quick") body = this.quickCalorieForm(this.modal);
     if (this.modal.kind === "choose") body = `<div class="mhead"><div>choose a food</div>${this.close()}</div><div class="stack">${this.state.foods.map((food) => `<button class="searchitem" data-action="log" data-id="${food.id}"><span><span>${html(food.name)}</span><span class="tiny">${html(food.brand || food.serving.description)}</span></span><span>${fmt(food.nutrition.calories)} kcal</span></button>`).join("")}<button class="btn" data-action="new-food">create a new food</button></div>`;
     if (this.modal.kind === "log") body = this.logForm(this.modal.food, this.modal.period);
@@ -162,11 +167,16 @@ export class DaybookApp {
     const n = food?.nutrition;
     const recipe = food?.recipe;
     const ingredients = recipe?.ingredients ?? [];
-    return `<form data-form="food" data-id="${modal.food?.id ?? ""}"><div class="mhead"><div>${modal.food ? "edit food" : "new food"}</div>${this.close()}</div><section class="ai-assist"><div class="ai-assist-head"><span class="ai-assist-icon">${icon("Sparkles")}</span><div><strong>AI Assist</strong><div>Use ChatGPT to estimate or extract this food.</div></div></div><div class="ai-actions"><button class="btn btn-icon" type="button" data-action="ask-food-ai">${icon("Copy")}<span>Ask AI</span></button><button class="btn btn-icon" type="button" data-action="apply-food-clipboard">${icon("ClipboardPaste")}<span>Apply Clipboard</span></button></div>${modal.aiMessage ? `<div class="notice success">${icon("Check")}${html(modal.aiMessage)}</div>` : ""}${modal.aiError ? `<div class="notice warn">${html(modal.aiError)}</div>` : ""}<details class="ai-fallback"><summary>Paste AI response manually</summary><textarea class="code" id="ai-food-manual" placeholder='{"schemaVersion":1,...}'></textarea><button class="tiny-btn" type="button" data-action="apply-food-manual">Apply</button></details></section><div class="two">${field("name", "name", food?.name ?? "", "text", "required")}${field("brand", "brand", food?.brand ?? "", "text")}${field("serving description", "description", food?.serving?.description ?? "1 serving", "text", "required")}${field("calories", "calories", n?.calories ?? 0, "number", "min=0 required")}${field("protein (g)", "proteinG", n?.proteinG ?? "", "number", "min=0 step=.1")}${field("carbs (g)", "carbsG", n?.carbsG ?? "", "number", "min=0 step=.1")}${field("fat (g)", "fatG", n?.fatG ?? "", "number", "min=0 step=.1")}${field("fiber (g)", "fiberG", n?.fiberG ?? "", "number", "min=0 step=.1")}${field("total sugar (g)", "sugarG", n?.sugarG ?? "", "number", "min=0 step=.1")}${field("added sugar (g)", "addedSugarG", n?.addedSugarG ?? "", "number", "min=0 step=.1")}${field("saturated fat (g)", "saturatedFatG", n?.saturatedFatG ?? "", "number", "min=0 step=.1")}${field("sodium (mg)", "sodiumMg", n?.sodiumMg ?? "", "number", "min=0 step=1")}</div><label class="recipe-toggle"><input type="checkbox" name="isRecipe" ${recipe ? "checked" : ""}><span>${icon("ChefHat")}<b>Is this a recipe?</b><small>Add ingredients, their optional macros, and instructions.</small></span></label>${recipe ? `<section class="recipe-editor"><div class="between"><div><strong>Ingredients</strong><div class="tiny">Amounts and component macros are optional.</div></div><button class="tiny-btn btn-icon" type="button" data-action="add-ingredient">${icon("ListPlus")}<span>Add ingredient</span></button></div><div class="ingredient-list">${ingredients.map((ingredient, index) => this.ingredientFields(ingredient, index)).join("")}</div><label class="field"><span>recipe instructions (optional)</span><textarea name="instructions" placeholder="Mix, cook, portion…">${html(recipe.instructions ?? "")}</textarea></label></section>` : ""}<div class="mfooter"><button class="btn-primary">save food</button></div></form>`;
+    return `<form data-form="food" data-id="${modal.food?.id ?? ""}"><div class="mhead"><div>${modal.food ? "edit food" : "new food"}</div>${this.close()}</div><section class="ai-assist"><div class="ai-assist-head"><span class="ai-assist-icon">${icon("Sparkles")}</span><div><strong>AI Assist</strong><div>Use ChatGPT to estimate or extract this food.</div></div></div><div class="ai-actions"><button class="btn btn-icon" type="button" data-action="ask-food-ai">${icon("Copy")}<span>Ask AI</span></button><button class="btn btn-icon" type="button" data-action="apply-food-clipboard">${icon("ClipboardPaste")}<span>Apply Clipboard</span></button></div>${modal.aiMessage ? `<div class="notice success">${icon("Check")}${html(modal.aiMessage)}</div>` : ""}${modal.aiError ? `<div class="notice warn">${html(modal.aiError)}</div>` : ""}<details class="ai-fallback"><summary>Paste AI response manually</summary><textarea class="code" id="ai-food-manual" placeholder='{"schemaVersion":1,...}'></textarea><button class="tiny-btn" type="button" data-action="apply-food-manual">Apply</button></details></section><div class="two">${field("food name", "name", food?.name ?? "", "text", "required placeholder='Cream cheese'")}${field("brand", "brand", food?.brand ?? "", "text")}${field("serving amount", "servingAmount", food?.serving?.amount ?? 1, "number", "min=.0001 step=any required")}${field("serving unit", "servingUnit", food?.serving?.unit ?? "serving", "text", "list=measurement-units required placeholder='tbsp, cup, g…'")}${field("calories", "calories", n?.calories ?? 0, "number", "min=0 required")}${field("protein (g)", "proteinG", n?.proteinG ?? "", "number", "min=0 step=.1")}${field("carbs (g)", "carbsG", n?.carbsG ?? "", "number", "min=0 step=.1")}${field("fat (g)", "fatG", n?.fatG ?? "", "number", "min=0 step=.1")}${field("fiber (g)", "fiberG", n?.fiberG ?? "", "number", "min=0 step=.1")}${field("total sugar (g)", "sugarG", n?.sugarG ?? "", "number", "min=0 step=.1")}${field("added sugar (g)", "addedSugarG", n?.addedSugarG ?? "", "number", "min=0 step=.1")}${field("saturated fat (g)", "saturatedFatG", n?.saturatedFatG ?? "", "number", "min=0 step=.1")}${field("sodium (mg)", "sodiumMg", n?.sodiumMg ?? "", "number", "min=0 step=1")}</div><div class="measurement-note">Keep quantity out of the food name. The serving above can be changed whenever you log it.</div><label class="recipe-toggle"><input type="checkbox" name="isRecipe" ${recipe ? "checked" : ""}><span>${icon("ChefHat")}<b>Is this a recipe?</b><small>Add ingredients, their optional macros, and instructions.</small></span></label>${recipe ? `<section class="recipe-editor"><div class="between"><div><strong>Ingredients</strong><div class="tiny">Amounts and component macros are optional.</div></div><button class="tiny-btn btn-icon" type="button" data-action="add-ingredient">${icon("ListPlus")}<span>Add ingredient</span></button></div><div class="ingredient-list">${ingredients.map((ingredient, index) => this.ingredientFields(ingredient, index)).join("")}</div><label class="field"><span>recipe instructions (optional)</span><textarea name="instructions" placeholder="Mix, cook, portion…">${html(recipe.instructions ?? "")}</textarea></label></section>` : ""}${measurementList()}<div class="mfooter"><button class="btn-primary">save food</button></div></form>`;
   }
 
   private ingredientFields(ingredient: Partial<Omit<RecipeIngredient, "nutrition">> & { nutrition?: Partial<RecipeIngredient["nutrition"]> }, index: number): string {
-    return `<div class="ingredient" data-ingredient="${index}"><div class="ingredient-head"><span>Ingredient ${index + 1}</span><button class="icon-btn danger" type="button" data-action="remove-ingredient" data-index="${index}" aria-label="Remove ingredient">${icon("Trash2")}</button></div><div class="ingredient-main">${field("name", `ingredientName_${index}`, ingredient.name ?? "", "text", "placeholder='e.g. black beans'")}${field("amount", `ingredientAmount_${index}`, ingredient.amount ?? "", "number", "min=0 step=any")}${field("unit", `ingredientUnit_${index}`, ingredient.unit ?? "", "text", "placeholder='cup, g, tbsp'")}</div><details class="ingredient-macros"><summary>Component macros (optional)</summary><div class="four">${field("calories", `ingredientCalories_${index}`, ingredient.nutrition?.calories ?? "", "number", "min=0")}${field("protein g", `ingredientProtein_${index}`, ingredient.nutrition?.proteinG ?? "", "number", "min=0 step=.1")}${field("carbs g", `ingredientCarbs_${index}`, ingredient.nutrition?.carbsG ?? "", "number", "min=0 step=.1")}${field("fat g", `ingredientFat_${index}`, ingredient.nutrition?.fatG ?? "", "number", "min=0 step=.1")}</div></details></div>`;
+    return `<div class="ingredient" data-ingredient="${index}"><div class="ingredient-head"><span>Ingredient ${index + 1}</span><button class="icon-btn danger" type="button" data-action="remove-ingredient" data-index="${index}" aria-label="Remove ingredient">${icon("Trash2")}</button></div><div class="ingredient-main">${field("name", `ingredientName_${index}`, ingredient.name ?? "", "text", "placeholder='e.g. black beans'")}${field("amount", `ingredientAmount_${index}`, ingredient.amount ?? "", "number", "min=0 step=any")}${field("unit", `ingredientUnit_${index}`, ingredient.unit ?? "", "text", "list=measurement-units placeholder='cup, g, tbsp'")}</div><details class="ingredient-macros"><summary>Component macros (optional)</summary><div class="four">${field("calories", `ingredientCalories_${index}`, ingredient.nutrition?.calories ?? "", "number", "min=0")}${field("protein g", `ingredientProtein_${index}`, ingredient.nutrition?.proteinG ?? "", "number", "min=0 step=.1")}${field("carbs g", `ingredientCarbs_${index}`, ingredient.nutrition?.carbsG ?? "", "number", "min=0 step=.1")}${field("fat g", `ingredientFat_${index}`, ingredient.nutrition?.fatG ?? "", "number", "min=0 step=.1")}</div></details></div>`;
+  }
+
+  private comboForm(error?: string): string {
+    const rows = [...this.state.foods].sort((a, b) => a.name.localeCompare(b.name)).map((food) => `<div class="combo-row"><label class="combo-select"><input type="checkbox" name="comboFood" value="${food.id}"><span class="combo-check">${icon("Check")}</span><span class="combo-info"><strong>${html(food.name)}</strong><small>${fmt(food.nutrition.calories)} kcal per ${html(food.serving.description)}</small></span></label><span class="combo-quantity"><input aria-label="Amount of ${html(food.name)}" name="comboAmount_${food.id}" type="number" min=".0001" step="any" value="${food.serving.amount}"><input aria-label="Unit for ${html(food.name)}" name="comboUnit_${food.id}" type="text" list="measurement-units" value="${html(food.serving.unit)}"></span></div>`).join("");
+    return `<form data-form="combo"><div class="mhead"><div><div>Build a saved combo</div><div class="tiny">Select foods, set their portions, log them together later.</div></div>${this.close()}</div>${field("combo name", "comboName", "", "text", "required placeholder='Bagel + cream cheese'")}${error ? `<div class="notice warn combo-error">${html(error)}</div>` : ""}<div class="combo-list">${rows}</div>${measurementList()}<div class="mfooter"><button class="btn-primary btn-icon">${icon("Save")}<span>Save combo</span></button></div></form>`;
   }
 
   private quickCalorieForm(modal: Extract<Modal, { kind: "quick" }>): string {
@@ -174,7 +184,7 @@ export class DaybookApp {
   }
 
   private logForm(food: Food, selected?: Period): string {
-    return `<form data-form="log" data-id="${food.id}"><div class="mhead"><div><div>${html(food.name)}</div><div class="tiny">${fmt(food.nutrition.calories)} kcal per ${html(food.serving.description)}</div></div>${this.close()}</div><div class="two"><label class="field"><span>meal</span><select name="period">${PERIODS.map((period) => `<option value="${period}" ${period === selected ? "selected" : ""}>${period}</option>`).join("")}</select></label>${field("servings", "servings", 1, "number", "min=.01 step=.01 required")}${field("date", "date", this.state.prefs.date, "date", "required")}</div><div class="mfooter"><button class="btn-primary">add to day</button></div></form>`;
+    return `<form data-form="log" data-id="${food.id}"><div class="mhead"><div><div>${html(food.name)}</div><div class="tiny">${fmt(food.nutrition.calories)} kcal per ${html(food.serving.description)}</div></div>${this.close()}</div><div class="two"><label class="field"><span>meal</span><select name="period">${PERIODS.map((period) => `<option value="${period}" ${period === selected ? "selected" : ""}>${period}</option>`).join("")}</select></label>${field("amount", "amount", food.serving.amount, "number", "min=.0001 step=any required")}${field("unit", "unit", food.serving.unit, "text", "list=measurement-units required")}${field("date", "date", this.state.prefs.date, "date", "required")}</div>${measurementList()}<div class="measurement-note">Nutrition scales from ${html(food.serving.description)}. Compatible kitchen and metric units convert automatically.</div><div class="mfooter"><button class="btn-primary">add to day</button></div></form>`;
   }
 
   private aiModal(modal: Extract<Modal, { kind: "ai" }>): string {
@@ -196,6 +206,7 @@ export class DaybookApp {
     if (action === "open-calendar-day") { this.state.prefs.date = String(button.dataset.date); this.calendarMonth = this.state.prefs.date.slice(0, 7); this.view = "day"; this.save(); }
     if (action === "close" || action === "backdrop" && event.target === button) { this.modal = null; this.render(); }
     if (action === "new-food") { this.modal = { kind: "food" }; this.render(); }
+    if (action === "build-combo" && this.state.foods.length >= 2) { this.modal = { kind: "combo" }; this.render(); }
     if (action === "edit-food") { const food = this.food(button.dataset.id); if (food) { this.modal = { kind: "food", food }; this.render(); } }
     if (action === "request-delete-food") { const food = this.food(button.dataset.id); if (food) { this.modal = { kind: "delete-food", food }; this.render(); } }
     if (action === "confirm-delete-food") {
@@ -265,6 +276,7 @@ export class DaybookApp {
     try {
       if (kind === "onboarding") this.submitOnboarding(data);
       if (kind === "food") this.submitFood(data, form.dataset.id);
+      if (kind === "combo") this.submitCombo(data);
       if (kind === "quick") this.submitQuick(data);
       if (kind === "log") this.submitLog(data, form.dataset.id);
       if (kind === "weight") this.submitWeight(data);
@@ -299,7 +311,32 @@ export class DaybookApp {
     this.save(`${Math.round(calories)} calories logged`);
   }
 
-  private submitLog(data: FormData, id?: string): void { const food = this.food(id); if (!food) throw new Error("Food no longer exists."); this.state.entries.push(createEntry(food, String(data.get("date")), normalizePeriod(data.get("period")), getNumber(data, "servings") ?? 1)); this.modal = null; this.save("added to day"); }
+  private submitCombo(data: FormData): void {
+    try {
+      const selectedIds = data.getAll("comboFood").map(String);
+      const selections = selectedIds.map((id) => {
+        const food = this.food(id);
+        if (!food) throw new Error("One of those foods is no longer in the library.");
+        return { food, amount: getNumber(data, `comboAmount_${id}`) ?? 0, unit: String(data.get(`comboUnit_${id}`) ?? food.serving.unit) };
+      });
+      this.state.foods.push(createComboFood(String(data.get("comboName") ?? ""), selections));
+      this.modal = null;
+      this.save("combo saved to your library");
+    } catch (error) {
+      this.modal = { kind: "combo", error: error instanceof Error ? error.message : "Could not save that combo." };
+      this.render();
+    }
+  }
+
+  private submitLog(data: FormData, id?: string): void {
+    const food = this.food(id);
+    if (!food) throw new Error("Food no longer exists.");
+    const amount = getNumber(data, "amount") ?? food.serving.amount;
+    const multiplier = servingMultiplier(amount, String(data.get("unit") ?? food.serving.unit), food.serving);
+    this.state.entries.push(createEntry(food, String(data.get("date")), normalizePeriod(data.get("period")), multiplier));
+    this.modal = null;
+    this.save("added to day");
+  }
   private submitWeight(data: FormData): void { const raw = getNumber(data, "weight"); if (!raw) throw new Error("Enter a weight."); this.addWeight(String(data.get("date")), this.state.profile.units === "metric" ? kgToPounds(raw) : raw); this.modal = null; this.save("check-in saved"); }
   private submitSettings(data: FormData): void { const goal = getNumber(data, "goalWeight"); Object.assign(this.state.profile, { manualDailyGuide: getNumber(data, "manualDailyGuide"), activityPAL: getNumber(data, "activityPAL") ?? 1.6, goalWeightLb: goal && this.state.profile.units === "metric" ? kgToPounds(goal) : goal, rateLbWeek: getNumber(data, "rateLbWeek") ?? 0, goalType: data.get("goalType") }); this.save("plan saved"); }
   private addWeight(date: string, weightLb: number): void { const now = new Date().toISOString(); const existing = this.state.weights.find((item) => item.date === date); if (existing) { existing.weightLb = weightLb; existing.updatedAt = now; } else this.state.weights.push({ id: uid("weight"), date, weightLb, createdAt: now, updatedAt: now }); this.state.profile.weightLb = weightLb; }
@@ -313,9 +350,10 @@ export class DaybookApp {
     const recipeEnabled = data.get("isRecipe") === "on";
     const ingredients = form ? [...form.querySelectorAll<HTMLElement>("[data-ingredient]")].map((_row, index) => ({
       id: base.recipe?.ingredients?.[index]?.id,
+      foodId: base.recipe?.ingredients?.[index]?.foodId,
       name: String(data.get(`ingredientName_${index}`) ?? ""),
       amount: getNumber(data, `ingredientAmount_${index}`),
-      unit: String(data.get(`ingredientUnit_${index}`) ?? ""),
+      unit: normalizeUnit(data.get(`ingredientUnit_${index}`), ""),
       nutrition: {
         calories: getNumber(data, `ingredientCalories_${index}`),
         proteinG: getNumber(data, `ingredientProtein_${index}`),
@@ -327,7 +365,11 @@ export class DaybookApp {
       ...base,
       name: String(data.get("name") ?? base.name ?? ""),
       brand: String(data.get("brand") ?? base.brand ?? "") || null,
-      serving: { ...(base.serving ?? {}), amount: 1, unit: "serving", description: String(data.get("description") ?? base.serving?.description ?? "1 serving") },
+      serving: {
+        ...(base.serving ?? {}),
+        amount: getNumber(data, "servingAmount") ?? base.serving?.amount ?? 1,
+        unit: normalizeUnit(data.get("servingUnit") ?? base.serving?.unit),
+      },
       nutrition: {
         ...(base.nutrition ?? {}),
         calories: getNumber(data, "calories") ?? 0,
