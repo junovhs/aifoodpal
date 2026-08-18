@@ -279,6 +279,13 @@ export const createQuickCalorieEntry = (calories: number, date: string, period: 
   };
 };
 
+/** Removes a reusable food while deliberately retaining immutable diary snapshots. */
+export const removeFoodFromLibrary = (state: AppState, foodId: string): boolean => {
+  const previousCount = state.foods.length;
+  state.foods = state.foods.filter((food) => food.id !== foodId);
+  return state.foods.length < previousCount;
+};
+
 export const createState = (date = isoDate()): AppState => {
   const now = new Date().toISOString();
   return {

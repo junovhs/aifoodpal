@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { applyAiResponse, buildAiPrompt, buildFoodAiPrompt, importFoodDraft, parseAiResponse } from "../src/ai";
-import { createEntry, createQuickCalorieEntry, createState, normalizeFood } from "../src/model";
+import { createEntry, createQuickCalorieEntry, createState, normalizeFood, removeFoodFromLibrary } from "../src/model";
 import { calorieGuidance, nutritionTargets, totalsFor } from "../src/nutrition";
 import { exportBackup, parseBackup } from "../src/storage";
 
@@ -60,6 +60,18 @@ describe("nutrition domain", () => {
     expect(entry.foodId).toBe(food.id);
     expect(entry.recipeSnapshot?.ingredients[0]?.name).toBe("Black beans");
     expect(entry.recipeSnapshot?.instructions).toBe("Assemble the bowls.");
+  });
+
+  it("removes a library food without deleting its diary snapshots", () => {
+    const state = readyState();
+    const food = normalizeFood({ name: "Archived soup", nutrition: { calories: 220, proteinG: 8, carbsG: 30, fatG: 7 } });
+    state.foods.push(food);
+    state.entries.push(createEntry(food, state.prefs.date, "lunch"));
+    expect(removeFoodFromLibrary(state, food.id)).toBe(true);
+    expect(state.foods).toHaveLength(0);
+    expect(state.entries).toHaveLength(1);
+    expect(state.entries[0]?.nameSnapshot).toBe("Archived soup");
+    expect(removeFoodFromLibrary(state, food.id)).toBe(false);
   });
 });
 
