@@ -40,6 +40,10 @@ button { cursor: pointer; }
 .main { width: 100%; max-width: 850px; margin: 0 auto; padding: env(safe-area-inset-top) 18px calc(98px + env(safe-area-inset-bottom)); }
 .side { display: none; }
 .top { display: flex; justify-content: space-between; align-items: center; min-height: 54px; margin-bottom: 0; }
+.top-actions { display: flex; align-items: center; gap: 8px; }
+.account-host { display: contents; }
+.account-trigger.signed-in { border-color: color-mix(in oklch, var(--accent) 42%, var(--line)); background: var(--accent-soft); color: var(--accent-dark); }
+.account-trigger span { max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wordmark { display: inline-flex; align-items: center; gap: 10px; color: var(--text); font: 600 20px/1 Georgia, "Times New Roman", serif; letter-spacing: -.02em; }
 .wordmark b { color: var(--accent); font-weight: 650; }
 .brandmark { display: grid; place-items: center; width: 39px; height: 39px; border-radius: 12px; background: var(--accent); color: white; box-shadow: 0 5px 16px oklch(0.53 0.13 43 / .24); }
@@ -50,6 +54,7 @@ button { cursor: pointer; }
 .btn, .btn-primary, .btn-danger, .tiny-btn, .icon-btn, .today-btn { appearance: none; display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 38px; padding: 0 13px; border: 1px solid var(--edge); border-radius: var(--radius-sm); background: color-mix(in oklch, var(--panel) 86%, transparent); color: var(--text-soft); font-weight: 550; transition: background .15s var(--ease), border-color .15s var(--ease), color .15s var(--ease), transform .12s var(--ease), box-shadow .15s var(--ease); }
 .btn:hover, .tiny-btn:hover, .icon-btn:hover, .today-btn:hover { border-color: var(--text-soft); background: var(--panel); color: var(--text); }
 button:active { transform: translateY(1px); }
+button:disabled { cursor: wait; opacity: .58; transform: none; }
 .btn-primary { min-height: 40px; border-color: var(--accent); background: var(--accent); color: white; box-shadow: inset 0 1px 0 rgb(255 255 255 / .2), 0 5px 16px oklch(0.53 0.13 43 / .2); }
 .btn-primary:hover { border-color: var(--accent-dark); background: var(--accent-dark); }
 .btn-danger { border-color: var(--danger); background: var(--danger); color: white; }
@@ -312,6 +317,22 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); backgro
 .modalback { position: fixed; z-index: 80; inset: 0; display: flex; align-items: center; justify-content: center; padding: 24px; background: rgb(41 29 21 / .27); backdrop-filter: blur(5px); }
 .modal { width: min(680px, 100%); max-height: 90vh; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--bg); box-shadow: var(--shadow-lift); }
 .modalin { padding: 18px; }.mhead { position: sticky; z-index: 2; top: 0; display: flex; justify-content: space-between; align-items: center; gap: 14px; margin: -18px -18px 18px; padding: 16px 18px 13px; border-bottom: 1px solid var(--line); background: color-mix(in oklch, var(--bg) 92%, transparent); backdrop-filter: blur(14px); }
+.account-backdrop { z-index: 95; }
+.account-modal { width: min(470px, 100%); }
+.account-modal form > .field + .field { margin-top: 12px; }
+.account-submit { width: 100%; margin-top: 16px; }
+.account-link { display: block; width: 100%; margin-top: 11px; padding: 5px; border: 0; background: transparent; color: var(--accent-dark); font-size: 12px; text-decoration: underline; text-underline-offset: 3px; }
+.account-divider { display: flex; align-items: center; gap: 10px; margin-top: 16px; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
+.account-divider::before, .account-divider::after { content: ""; height: 1px; flex: 1; background: var(--line-soft); }
+.account-status { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 18px; padding: 14px; border: 1px solid color-mix(in oklch, var(--accent) 25%, var(--line)); border-radius: var(--radius); background: var(--accent-soft); color: var(--accent-dark); }
+.account-status.local { border-color: var(--line); background: var(--panel-muted); color: var(--text-soft); }
+.account-status > span { display: grid; place-items: center; width: 34px; height: 34px; flex: 0 0 auto; border-radius: 50%; background: var(--panel); }
+.account-status div { display: grid; gap: 3px; }
+.account-status small { color: var(--text-soft); }
+.account-section { padding: 16px 0; border-top: 1px solid var(--line-soft); }
+.account-section strong { font-family: Georgia, "Times New Roman", serif; font-size: 16px; }
+.account-section .btn { justify-self: start; }
+.account-modal .notice { margin-bottom: 14px; }
 .close { display: grid; place-items: center; width: 34px; height: 34px; padding: 0; border: 1px solid var(--line); border-radius: 50%; background: var(--panel); color: var(--muted); }.close:hover { border-color: var(--edge); color: var(--text); }
 .code { min-height: 220px; font: 10px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
 .searchitem { width: 100%; display: flex; justify-content: space-between; align-items: center; gap: 12px; min-height: 52px; padding: 9px 11px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel); text-align: left; }.searchitem > span:first-child { display: grid; }
@@ -332,6 +353,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); backgro
 }
 
 @media (max-width: 700px) {
+  .top-actions > .btn:first-child span { display: none; }
+  .account-trigger span { max-width: 92px; }
   .main { padding-inline: 14px; }
   .page-intro { align-items: center; }.page-intro h1 { font-size: 24px; }.eyebrow { display: none; }
   .summary { padding: 19px 16px; }.summary-top { align-items: center; }.summary-actions { flex-direction: column-reverse; }.summary-actions .btn span, .summary-actions .btn-primary span { display: none; }.summary-actions .btn, .summary-actions .btn-primary { width: 42px; padding: 0; }

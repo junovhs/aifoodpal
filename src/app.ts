@@ -7,6 +7,7 @@ import { calendarGrid, formatMonth, shiftMonth } from "./calendar";
 import { createComboFood } from "./combos";
 import { formatQuantity, normalizeUnit, servingMultiplier, UNIT_OPTIONS } from "./units";
 import { DiaryDragController } from "./diary-drag";
+import type { AccountController } from "./account";
 
 type View = "day" | "calendar" | "library" | "trend" | "settings";
 type FoodModal = { kind: "food"; food?: Food; draft?: FoodInput; aiMessage?: string; aiError?: string };
@@ -25,7 +26,7 @@ export class DaybookApp {
   private modal: Modal = null;
   private toastTimer?: number;
 
-  constructor(private readonly root: HTMLElement, private readonly repository: StateRepository) {
+  constructor(private readonly root: HTMLElement, private readonly repository: StateRepository, private readonly account?: AccountController) {
     this.state = repository.load();
     this.calendarMonth = this.state.prefs.date.slice(0, 7);
   }
@@ -35,6 +36,7 @@ export class DaybookApp {
     this.root.addEventListener("submit", (event) => this.onSubmit(event));
     this.root.addEventListener("change", (event) => this.onChange(event));
     this.root.addEventListener("input", (event) => this.onInput(event));
+    this.account?.start(() => this.renderAccount());
     this.render();
     new DiaryDragController(
       this.root,
@@ -51,8 +53,16 @@ export class DaybookApp {
 
   private render(): void {
     const brand = `<div class="wordmark"><span class="brandmark">${icon("NotebookTabs")}</span><span><b>AI</b>foodpal</span></div>`;
-    this.root.innerHTML = `<div class="shell"><aside class="side">${brand}${this.nav()}<div class="sidebottom">${icon("ShieldCheck")}<span>Private by default.<br>Stored in this browser.</span></div></aside><main class="main"><header class="top">${brand}<button class="btn btn-icon" data-action="open-ai">${icon("Sparkles")}<span>AI bridge</span></button></header><div class="view">${this.content()}</div></main></div>${this.nav(true)}${this.modalHtml()}${this.state.profile.onboardingComplete ? "" : this.onboarding()}<div class="toast" id="toast"></div>`;
+    this.root.innerHTML = `<div class="shell"><aside class="side">${brand}${this.nav()}<div class="sidebottom">${icon("ShieldCheck")}<span>Private by default.<br>Stored in this browser.</span></div></aside><main class="main"><header class="top">${brand}<div class="top-actions"><button class="btn btn-icon" data-action="open-ai">${icon("Sparkles")}<span>AI bridge</span></button>${this.account ? `<div class="account-host" data-account-header>${this.account.headerHtml()}</div>` : ""}</div></header><div class="view">${this.content()}</div></main></div>${this.nav(true)}${this.modalHtml()}${this.account ? `<div data-account-modal>${this.account.modalHtml()}</div>` : ""}${this.state.profile.onboardingComplete ? "" : this.onboarding()}<div class="toast" id="toast"></div>`;
     renderIcons(this.root);
+  }
+
+  private renderAccount(): void {
+    if (!this.account) return;
+    const header = this.root.querySelector<HTMLElement>("[data-account-header]");
+    const modal = this.root.querySelector<HTMLElement>("[data-account-modal]");
+    if (header) { header.innerHTML = this.account.headerHtml(); renderIcons(header); }
+    if (modal) { modal.innerHTML = this.account.modalHtml(); renderIcons(modal); }
   }
 
   private nav(bottom = false): string {
@@ -206,6 +216,7 @@ export class DaybookApp {
   }
 
   private onClick(event: Event): void {
+    if (this.account?.handleClick(event)) return;
     const button = (event.target as Element).closest<HTMLElement>("[data-action]");
     if (!button) return;
     const action = button.dataset.action;
@@ -279,9 +290,10 @@ export class DaybookApp {
   }
 
   private onSubmit(event: Event): void {
-    const form = (event.target as Element).closest<HTMLFormElement>("form[data-form]");
+    const form = (event.target as Element).closest<HTMLFormElement>("form[data-form], form[data-account-form]");
     if (!form) return;
     event.preventDefault();
+    if (this.account?.handlesForm(form)) { void this.account.submit(form); return; }
     const data = new FormData(form);
     const kind = form.dataset.form;
     try {
