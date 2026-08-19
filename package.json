@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "test": "vitest run",
-    "check": "tsc -b --pretty false"
+    "check": "tsc -b --pretty false",
+    "verify:supabase": "node scripts/verify-supabase.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.3",

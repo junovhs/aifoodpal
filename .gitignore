@@ -8,6 +8,9 @@ dist/
 coverage/
 *.local
 *.tsbuildinfo
+.env
+.env.*
+!.env.example
 
 # semmap artifacts (regenerable, not committed - DEC-10)
 SEMMAP.md
