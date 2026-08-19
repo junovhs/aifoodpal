@@ -42,6 +42,10 @@ button { cursor: pointer; }
 .top { display: flex; justify-content: space-between; align-items: center; min-height: 54px; margin-bottom: 0; }
 .top-actions { display: flex; align-items: center; gap: 8px; }
 .account-host { display: contents; }
+.sync-host { display: contents; }
+.sync-trigger.synced { border-color: color-mix(in oklch, var(--accent) 28%, var(--line)); color: var(--accent-dark); }
+.sync-trigger.offline, .sync-trigger.migration { border-color: color-mix(in oklch, var(--warn) 45%, var(--line)); background: var(--warn-bg); color: var(--warn); }
+.sync-trigger.conflict { border-color: color-mix(in oklch, var(--danger) 45%, var(--line)); background: color-mix(in oklch, var(--danger) 8%, var(--panel)); color: var(--danger); }
 .account-trigger.signed-in { border-color: color-mix(in oklch, var(--accent) 42%, var(--line)); background: var(--accent-soft); color: var(--accent-dark); }
 .account-trigger span { max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wordmark { display: inline-flex; align-items: center; gap: 10px; color: var(--text); font: 600 20px/1 Georgia, "Times New Roman", serif; letter-spacing: -.02em; }
@@ -318,6 +322,13 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); backgro
 .modal { width: min(680px, 100%); max-height: 90vh; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--bg); box-shadow: var(--shadow-lift); }
 .modalin { padding: 18px; }.mhead { position: sticky; z-index: 2; top: 0; display: flex; justify-content: space-between; align-items: center; gap: 14px; margin: -18px -18px 18px; padding: 16px 18px 13px; border-bottom: 1px solid var(--line); background: color-mix(in oklch, var(--bg) 92%, transparent); backdrop-filter: blur(14px); }
 .account-backdrop { z-index: 95; }
+.sync-backdrop { z-index: 94; }
+.sync-modal { width: min(500px, 100%); }
+.sync-summary { display: flex; align-items: flex-start; gap: 12px; padding: 15px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-muted); }
+.sync-summary > span { display: grid; place-items: center; width: 36px; height: 36px; flex: 0 0 auto; border-radius: 50%; background: var(--panel); color: var(--accent-dark); }
+.sync-summary div { display: grid; gap: 3px; }
+.sync-summary small, .sync-copy { color: var(--text-soft); }
+.sync-copy { margin: 16px 2px 0; font-size: 12px; }
 .account-modal { width: min(470px, 100%); }
 .account-modal form > .field + .field { margin-top: 12px; }
 .account-submit { width: 100%; margin-top: 16px; }
@@ -355,6 +366,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); backgro
 @media (max-width: 700px) {
   .top-actions > .btn:first-child span { display: none; }
   .account-trigger span { max-width: 92px; }
+  .sync-trigger span { display: none; }
   .main { padding-inline: 14px; }
   .page-intro { align-items: center; }.page-intro h1 { font-size: 24px; }.eyebrow { display: none; }
   .summary { padding: 19px 16px; }.summary-top { align-items: center; }.summary-actions { flex-direction: column-reverse; }.summary-actions .btn span, .summary-actions .btn-primary span { display: none; }.summary-actions .btn, .summary-actions .btn-primary { width: 42px; padding: 0; }

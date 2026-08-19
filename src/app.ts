@@ -8,6 +8,7 @@ import { createComboFood } from "./combos";
 import { formatQuantity, normalizeUnit, servingMultiplier, UNIT_OPTIONS } from "./units";
 import { DiaryDragController } from "./diary-drag";
 import type { AccountController } from "./account";
+import { CloudStateRepository, type SyncStatus } from "./cloud-sync";
 
 type View = "day" | "calendar" | "library" | "trend" | "settings";
 type FoodModal = { kind: "food"; food?: Food; draft?: FoodInput; aiMessage?: string; aiError?: string };
@@ -25,6 +26,8 @@ export class DaybookApp {
   private calendarMonth: string;
   private modal: Modal = null;
   private toastTimer?: number;
+  private syncStatus?: SyncStatus;
+  private syncOpen = false;
 
   constructor(private readonly root: HTMLElement, private readonly repository: StateRepository, private readonly account?: AccountController) {
     this.state = repository.load();
@@ -37,6 +40,17 @@ export class DaybookApp {
     this.root.addEventListener("change", (event) => this.onChange(event));
     this.root.addEventListener("input", (event) => this.onInput(event));
     this.account?.start(() => this.renderAccount());
+    if (this.repository instanceof CloudStateRepository) {
+      this.syncStatus = this.repository.getStatus();
+      this.repository.connect(
+        (state) => { this.state = state; this.render(); },
+        (status) => {
+          this.syncStatus = status;
+          if (status.phase === "migration" || status.phase === "conflict") this.syncOpen = true;
+          this.renderSync();
+        },
+      );
+    }
     this.render();
     new DiaryDragController(
       this.root,
@@ -53,7 +67,7 @@ export class DaybookApp {
 
   private render(): void {
     const brand = `<div class="wordmark"><span class="brandmark">${icon("NotebookTabs")}</span><span><b>AI</b>foodpal</span></div>`;
-    this.root.innerHTML = `<div class="shell"><aside class="side">${brand}${this.nav()}<div class="sidebottom">${icon("ShieldCheck")}<span>Private by default.<br>Stored in this browser.</span></div></aside><main class="main"><header class="top">${brand}<div class="top-actions"><button class="btn btn-icon" data-action="open-ai">${icon("Sparkles")}<span>AI bridge</span></button>${this.account ? `<div class="account-host" data-account-header>${this.account.headerHtml()}</div>` : ""}</div></header><div class="view">${this.content()}</div></main></div>${this.nav(true)}${this.modalHtml()}${this.account ? `<div data-account-modal>${this.account.modalHtml()}</div>` : ""}${this.state.profile.onboardingComplete ? "" : this.onboarding()}<div class="toast" id="toast"></div>`;
+    this.root.innerHTML = `<div class="shell"><aside class="side">${brand}${this.nav()}<div class="sidebottom">${icon("ShieldCheck")}<span>Private by default.<br>Stored in this browser.</span></div></aside><main class="main"><header class="top">${brand}<div class="top-actions"><button class="btn btn-icon" data-action="open-ai">${icon("Sparkles")}<span>AI bridge</span></button>${this.syncStatus ? `<div class="sync-host" data-sync-header>${this.syncHeaderHtml()}</div>` : ""}${this.account ? `<div class="account-host" data-account-header>${this.account.headerHtml()}</div>` : ""}</div></header><div class="view">${this.content()}</div></main></div>${this.nav(true)}${this.modalHtml()}${this.syncStatus ? `<div data-sync-modal>${this.syncModalHtml()}</div>` : ""}${this.account ? `<div data-account-modal>${this.account.modalHtml()}</div>` : ""}${this.state.profile.onboardingComplete ? "" : this.onboarding()}<div class="toast" id="toast"></div>`;
     renderIcons(this.root);
   }
 
@@ -63,6 +77,31 @@ export class DaybookApp {
     const modal = this.root.querySelector<HTMLElement>("[data-account-modal]");
     if (header) { header.innerHTML = this.account.headerHtml(); renderIcons(header); }
     if (modal) { modal.innerHTML = this.account.modalHtml(); renderIcons(modal); }
+  }
+
+  private renderSync(): void {
+    if (!this.syncStatus) return;
+    const header = this.root.querySelector<HTMLElement>("[data-sync-header]");
+    const modal = this.root.querySelector<HTMLElement>("[data-sync-modal]");
+    if (header) { header.innerHTML = this.syncHeaderHtml(); renderIcons(header); }
+    if (modal) { modal.innerHTML = this.syncModalHtml(); renderIcons(modal); }
+  }
+
+  private syncHeaderHtml(): string {
+    const status = this.syncStatus!;
+    const labels: Record<SyncStatus["phase"], string> = { local: "On this device", connecting: "Syncing…", migration: "Finish setup", synced: "Synced", offline: "Offline", conflict: "Sync conflict" };
+    return `<button class="btn btn-icon sync-trigger ${status.phase}" data-sync-action="open" aria-label="Open sync details: ${html(status.message)}">${icon(status.phase === "synced" ? "Check" : "DatabaseBackup")}<span>${labels[status.phase]}</span></button>`;
+  }
+
+  private syncModalHtml(): string {
+    if (!this.syncOpen || !this.syncStatus) return "";
+    const status = this.syncStatus;
+    const close = `<button class="close" data-sync-action="close" aria-label="Close sync details">${icon("X")}</button>`;
+    let body = `<div class="sync-summary"><span>${icon("DatabaseBackup")}</span><div><strong>${html(status.message)}</strong><small>${status.revision ? `Cloud revision ${status.revision}` : "Your browser copy stays available."}</small></div></div>`;
+    if (status.phase === "migration") body += `<p class="sync-copy">This account has no cloud daybook yet. Upload the data already on this device so it can become the account’s first cloud copy? After it is safely uploaded, the signed-out local copy will be cleared.</p><div class="mfooter"><button class="btn" data-sync-action="decline">Not now</button><button class="btn-primary" data-sync-action="migrate">Use this device’s daybook</button></div>`;
+    if (status.phase === "conflict") body += `<p class="sync-copy">Another device saved after this one last loaded. Choose the cloud copy, or explicitly replace it with the complete copy currently on this device.</p><div class="mfooter"><button class="btn" data-sync-action="use-cloud">Use newer cloud copy</button><button class="btn-primary" data-sync-action="use-local">Keep this device’s copy</button></div>`;
+    if (status.phase === "offline") body += `<p class="sync-copy">You can keep logging. Changes are cached locally and will retry when the connection returns.</p><div class="mfooter"><button class="btn-primary" data-sync-action="retry">Try again</button></div>`;
+    return `<div class="modalback show sync-backdrop" data-sync-action="backdrop"><div class="modal sync-modal" role="dialog" aria-modal="true" aria-labelledby="sync-title"><div class="modalin"><div class="mhead"><div><div id="sync-title">Cloud sync</div><div class="tiny">Revision-safe account storage</div></div>${close}</div>${body}</div></div></div>`;
   }
 
   private nav(bottom = false): string {
@@ -216,6 +255,20 @@ export class DaybookApp {
   }
 
   private onClick(event: Event): void {
+    const syncButton = (event.target as Element).closest<HTMLElement>("[data-sync-action]");
+    if (syncButton && this.repository instanceof CloudStateRepository) {
+      const action = syncButton.dataset.syncAction;
+      if (action === "backdrop" && event.target !== syncButton) return;
+      if (action === "open") this.syncOpen = true;
+      if (action === "close" || action === "backdrop") this.syncOpen = false;
+      if (action === "migrate") void this.repository.confirmMigration();
+      if (action === "decline") { this.repository.declineMigration(); this.syncOpen = false; }
+      if (action === "retry") void this.repository.retry();
+      if (action === "use-cloud") void this.repository.resolveConflict("cloud");
+      if (action === "use-local") void this.repository.resolveConflict("local");
+      this.renderSync();
+      return;
+    }
     if (this.account?.handleClick(event)) return;
     const button = (event.target as Element).closest<HTMLElement>("[data-action]");
     if (!button) return;
