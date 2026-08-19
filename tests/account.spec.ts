@@ -227,6 +227,38 @@ describe("Supabase account browser flow", () => {
     expect(root.querySelector('[data-sync-action="migrate"]')).not.toBeNull();
   });
 
+  it("keeps the sign-in form connected and its typed values through an unrelated rerender", async () => {
+    const signedIn = session("person@example.com");
+    let failRestore: ((reason: Error) => void) | undefined;
+    const auth = {
+      onAuthStateChange: vi.fn(() => ({ data: { subscription: { id: "test", callback: vi.fn(), unsubscribe: vi.fn() } } })),
+      getSession: vi.fn(() => new Promise((_resolve, reject) => { failRestore = reject; })),
+      signInWithPassword: vi.fn(async () => ({ data: { user: signedIn.user, session: signedIn }, error: null })),
+    };
+    const controller = new AccountController(auth as unknown as ConstructorParameters<typeof AccountController>[0]);
+    const root = document.querySelector<HTMLElement>("#account-root")!;
+    new DaybookApp(root, { load: () => createState("2026-08-18"), save: vi.fn() }, controller).start();
+
+    root.querySelector<HTMLElement>('[data-account-action="open"]')!.click();
+    const form = root.querySelector<HTMLFormElement>('form[data-account-form="sign-in"]')!;
+    const email = form.querySelector<HTMLInputElement>('input[name="email"]')!;
+    const password = form.querySelector<HTMLInputElement>('input[name="password"]')!;
+    email.value = "person@example.com";
+    password.value = "long-password";
+
+    // a failed session restore rerenders even though the visible markup is unchanged
+    failRestore?.(new Error("cloud unreachable"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(root.querySelector('form[data-account-form="sign-in"]')).toBe(form);
+    expect(form.isConnected).toBe(true);
+    expect(email.value).toBe("person@example.com");
+    expect(password.value).toBe("long-password");
+
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await vi.waitFor(() => expect(auth.signInWithPassword).toHaveBeenCalledWith({ email: "person@example.com", password: "long-password" }));
+  });
+
   it("stays on the diary in local mode where accounts are unavailable", async () => {
     const controller = new AccountController(null);
     const root = document.querySelector<HTMLElement>("#account-root")!;

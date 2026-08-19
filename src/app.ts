@@ -28,6 +28,7 @@ export class DaybookApp {
   private toastTimer?: number;
   private syncStatus?: SyncStatus;
   private syncOpen = false;
+  private readonly mounted = new WeakMap<HTMLElement, string>();
 
   constructor(private readonly root: HTMLElement, private readonly repository: StateRepository, private readonly account?: AccountController) {
     this.state = repository.load();
@@ -75,16 +76,24 @@ export class DaybookApp {
     if (!this.account) return;
     const header = this.root.querySelector<HTMLElement>("[data-account-header]");
     const modal = this.root.querySelector<HTMLElement>("[data-account-modal]");
-    if (header) { header.innerHTML = this.account.headerHtml(); renderIcons(header); }
-    if (modal) { modal.innerHTML = this.account.modalHtml(); renderIcons(modal); }
+    this.mount(header, this.account.headerHtml());
+    this.mount(modal, this.account.modalHtml());
+  }
+
+  /** Replaces a host's markup only when it actually changed, so an unrelated rerender never destroys a form the visitor is using. */
+  private mount(host: HTMLElement | null, markup: string): void {
+    if (!host || this.mounted.get(host) === markup) return;
+    this.mounted.set(host, markup);
+    host.innerHTML = markup;
+    renderIcons(host);
   }
 
   private renderSync(): void {
     if (!this.syncStatus) return;
     const header = this.root.querySelector<HTMLElement>("[data-sync-header]");
     const modal = this.root.querySelector<HTMLElement>("[data-sync-modal]");
-    if (header) { header.innerHTML = this.syncHeaderHtml(); renderIcons(header); }
-    if (modal) { modal.innerHTML = this.syncModalHtml(); renderIcons(modal); }
+    this.mount(header, this.syncHeaderHtml());
+    this.mount(modal, this.syncModalHtml());
   }
 
   private syncHeaderHtml(): string {
