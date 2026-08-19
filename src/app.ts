@@ -1,11 +1,12 @@
 import { applyAiResponse, buildAiPrompt, buildFoodAiPrompt, importFoodDraft, parseAiResponse, type AiResponse } from "./ai";
-import { createEntry, createQuickCalorieEntry, normalizeFood, normalizePeriod, PERIODS, removeFoodFromLibrary, uid, type AppState, type Food, type FoodInput, type Period, type RecipeIngredient } from "./model";
+import { createEntry, createQuickCalorieEntry, isoDate, moveDiaryEntry, normalizeFood, normalizePeriod, PERIODS, removeFoodFromLibrary, uid, type AppState, type Food, type FoodInput, type Period, type RecipeIngredient } from "./model";
 import { calorieGuidance, dailyCalorieGuide, formatDate, kgToPounds, latestWeight, nutritionTargets, poundsToKg, round, shiftDate, totalsFor } from "./nutrition";
 import { exportBackup, parseBackup, type StateRepository } from "./storage";
 import { icon, renderIcons } from "./icons";
 import { calendarGrid, formatMonth, shiftMonth } from "./calendar";
 import { createComboFood } from "./combos";
 import { formatQuantity, normalizeUnit, servingMultiplier, UNIT_OPTIONS } from "./units";
+import { DiaryDragController } from "./diary-drag";
 
 type View = "day" | "calendar" | "library" | "trend" | "settings";
 type FoodModal = { kind: "food"; food?: Food; draft?: FoodInput; aiMessage?: string; aiError?: string };
@@ -35,6 +36,11 @@ export class DaybookApp {
     this.root.addEventListener("change", (event) => this.onChange(event));
     this.root.addEventListener("input", (event) => this.onInput(event));
     this.render();
+    new DiaryDragController(
+      this.root,
+      (entryId, period, index) => this.moveEntry(entryId, period, index),
+      () => { this.render(); this.showToast("meal order updated"); },
+    );
   }
 
   private save(message?: string): void {
@@ -64,7 +70,7 @@ export class DaybookApp {
   }
 
   private calendar(): string {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = isoDate();
     const days = calendarGrid(this.calendarMonth);
     const monthEntries = this.state.entries.filter((entry) => entry.date.startsWith(this.calendarMonth));
     const activeDays = new Set(monthEntries.map((entry) => entry.date)).size;
@@ -101,20 +107,25 @@ export class DaybookApp {
     const entries = this.state.entries.filter((entry) => entry.date === date && entry.period === period);
     const total = totalsFor(this.state, date, period);
     const glyph: Record<Period, Parameters<typeof icon>[0]> = { breakfast: "Coffee", lunch: "Sun", dinner: "Moon", snacks: "Apple" };
-    return `<section class="mealgroup card ${entries.length ? "has-entries" : ""}"><div class="mealhead"><div class="mealidentity"><span class="meal-period-icon ${period}">${icon(glyph[period])}</span><div><div class="mealname">${period}</div><div class="mealsum">${fmt(total.calories)} kcal · ${fmt(total.proteinG, 1)}p · ${fmt(total.carbsG, 1)}c · ${fmt(total.fatG, 1)}f</div></div></div><button class="icon-btn subtle" data-action="choose-food" data-period="${period}" aria-label="Add ${period}">${icon("Plus")}</button></div>${entries.length ? `<div class="entrylist">${entries.map((entry) => this.entryHtml(entry)).join("")}</div>` : ""}</section>`;
+    return `<section class="mealgroup card ${entries.length ? "has-entries" : ""}" data-period="${period}"><div class="mealhead"><div class="mealidentity"><span class="meal-period-icon ${period}">${icon(glyph[period])}</span><div><div class="meal-label">Meal</div><div class="mealname">${period}</div><div class="mealsum">${fmt(total.calories)} kcal · ${fmt(total.proteinG, 1)}p · ${fmt(total.carbsG, 1)}c · ${fmt(total.fatG, 1)}f</div></div></div><button class="icon-btn subtle" data-action="choose-food" data-period="${period}" aria-label="Add ${period}">${icon("Plus")}</button></div><div class="entrylist">${entries.map((entry) => this.entryHtml(entry)).join("")}</div></section>`;
   }
 
   private entryHtml(entry: AppState["entries"][number]): string {
     const loggedQuantity = formatQuantity(entry.servingSnapshot.amount * entry.servings, entry.servingSnapshot.unit);
-    const summary = `<div class="food-icon ${entry.recipeSnapshot ? "recipe" : ""}">${icon(entry.recipeSnapshot ? "ChefHat" : "Utensils")}</div><div class="entrymain"><div class="ename">${html(entry.nameSnapshot)}${entry.recipeSnapshot ? `<span class="recipe-badge">Recipe</span>` : ""}</div><div class="esub">${html(loggedQuantity)}${entry.recipeSnapshot ? ` · ${entry.recipeSnapshot.ingredients.length} components` : ""}</div></div><div class="entrymacro">${this.macroBar(entry.nutritionSnapshot.proteinG, entry.nutritionSnapshot.carbsG, entry.nutritionSnapshot.fatG)}</div><span class="ekcal">${fmt(entry.nutritionSnapshot.calories * entry.servings)} <small>kcal</small></span><button class="icon-btn danger" data-action="delete-entry" data-id="${entry.id}" aria-label="Remove ${html(entry.nameSnapshot)}">${icon("Trash2")}</button>`;
-    if (!entry.recipeSnapshot) return `<div class="entry">${summary}</div>`;
+    const summary = `<button class="drag-handle" data-drag-handle aria-label="Drag ${html(entry.nameSnapshot)} to reorder">${icon("GripVertical")}</button><div class="food-icon ${entry.recipeSnapshot ? "recipe" : ""}">${icon(entry.recipeSnapshot ? "ChefHat" : "Utensils")}</div><div class="entrymain"><div class="ename">${html(entry.nameSnapshot)}${entry.recipeSnapshot ? `<span class="recipe-badge">Recipe</span>` : ""}</div><div class="esub">${html(loggedQuantity)}${entry.recipeSnapshot ? ` · ${entry.recipeSnapshot.ingredients.length} components` : ""}</div></div><div class="entrymacro">${this.macroBar(entry.nutritionSnapshot.proteinG, entry.nutritionSnapshot.carbsG, entry.nutritionSnapshot.fatG)}</div><span class="ekcal">${fmt(entry.nutritionSnapshot.calories * entry.servings)} <small>kcal</small></span><button class="icon-btn danger" data-action="delete-entry" data-id="${entry.id}" aria-label="Remove ${html(entry.nameSnapshot)}">${icon("Trash2")}</button>`;
+    if (!entry.recipeSnapshot) return `<div class="entry-shell" data-entry-id="${entry.id}"><div class="entry">${summary}</div></div>`;
     const ingredients = entry.recipeSnapshot.ingredients.map((ingredient) => {
       const amount = ingredient.amount == null ? "" : fmt(ingredient.amount * entry.servings, 2);
       const nutrient = ingredient.nutrition;
       const macros = [[nutrient.calories, "kcal"], [nutrient.proteinG, "p"], [nutrient.carbsG, "c"], [nutrient.fatG, "f"]].filter(([value]) => value !== null).map(([value, label]) => `${fmt((value as number) * entry.servings, 1)}${label}`).join(" · ");
       return `<li><span>${html([amount, ingredient.unit, ingredient.name].filter(Boolean).join(" "))}</span><span>${macros}</span></li>`;
     }).join("");
-    return `<details class="recipe-entry"><summary class="entry">${summary}</summary><div class="recipe-entry-body"><div class="recipe-caption">Components for ${html(loggedQuantity)}</div><ul>${ingredients || "<li><span>No ingredients listed</span></li>"}</ul>${entry.recipeSnapshot.instructions ? `<div class="recipe-instructions"><strong>Instructions</strong><p>${html(entry.recipeSnapshot.instructions).replaceAll("\n", "<br>")}</p></div>` : ""}</div></details>`;
+    return `<div class="entry-shell" data-entry-id="${entry.id}"><details class="recipe-entry"><summary class="entry">${summary}</summary><div class="recipe-entry-body"><div class="recipe-caption">Components for ${html(loggedQuantity)}</div><ul>${ingredients || "<li><span>No ingredients listed</span></li>"}</ul>${entry.recipeSnapshot.instructions ? `<div class="recipe-instructions"><strong>Instructions</strong><p>${html(entry.recipeSnapshot.instructions).replaceAll("\n", "<br>")}</p></div>` : ""}</div></details></div>`;
+  }
+
+  private moveEntry(entryId: string, period: Period, index: number): void {
+    this.state.entries = moveDiaryEntry(this.state.entries, entryId, period, index);
+    this.repository.save(this.state);
   }
 
   private macroBar(protein: number | null, carbs: number | null, fat: number | null): string {
@@ -200,9 +211,9 @@ export class DaybookApp {
     const action = button.dataset.action;
     if (action === "view") { this.view = button.dataset.view as View; if (this.view === "calendar") this.calendarMonth = this.state.prefs.date.slice(0, 7); this.render(); }
     if (action === "date") { this.state.prefs.date = shiftDate(this.state.prefs.date, Number(button.dataset.days)); this.save(); }
-    if (action === "today") { this.state.prefs.date = new Date().toISOString().slice(0, 10); this.save(); }
+    if (action === "today") { this.state.prefs.date = isoDate(); this.save(); }
     if (action === "calendar-month") { this.calendarMonth = shiftMonth(this.calendarMonth, Number(button.dataset.months)); this.render(); }
-    if (action === "calendar-today") { this.calendarMonth = new Date().toISOString().slice(0, 7); this.render(); }
+    if (action === "calendar-today") { this.calendarMonth = isoDate().slice(0, 7); this.render(); }
     if (action === "open-calendar-day") { this.state.prefs.date = String(button.dataset.date); this.calendarMonth = this.state.prefs.date.slice(0, 7); this.view = "day"; this.save(); }
     if (action === "close" || action === "backdrop" && event.target === button) { this.modal = null; this.render(); }
     if (action === "new-food") { this.modal = { kind: "food" }; this.render(); }

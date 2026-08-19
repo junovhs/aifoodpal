@@ -1,5 +1,5 @@
 import { backfillEntryNutrition } from "./storage";
-import { createEntry, normalizeFood, normalizePeriod, type AppState, type Food, type FoodInput, type GoalType, type PaceMode, type Profile } from "./model";
+import { createEntry, isoDate, normalizeFood, normalizePeriod, type AppState, type Food, type FoodInput, type GoalType, type PaceMode, type Profile } from "./model";
 import { latestWeight, nutritionTargets, shiftDate } from "./nutrition";
 
 type UpsertFoodOperation = { type: "upsertFood"; food: FoodInput };
@@ -38,10 +38,11 @@ Rules:
 - Food names contain only the food identity. Never put quantities such as "2 tbsp" or "100 g" in the name; put them in serving.amount and serving.unit.
 - Normalize common units to tsp, tbsp, fl oz, cup, ml, l, g, kg, oz, lb, serving, piece, slice, or container. A specific custom unit is allowed when needed.
 - Preserve every known value in PARTIAL FOOD unless you have an explicit replacement.
-- Unknown detailed nutrients must be null, never invented as 0.
+- Make a best-effort estimate for calories, proteinG, carbsG, fatG, and fiberG whenever exact values are unavailable. Use typical portions, ingredients, preparation, and restaurant data as clues; do not leave core macros blank merely because an estimate is required.
+- For detailed nutrients beyond those core macros, use a reasonable estimate when supported; otherwise use null, never an invented 0.
 - Use 0 only when a nutrient is confidently zero.
 - sugarG is TOTAL sugar. addedSugarG is ADDED sugar only.
-- If this is a recipe, include recipe.ingredients and optional recipe.instructions. Ingredient nutrition is optional and unknown values are null.
+- If this is a recipe, include recipe.ingredients and optional recipe.instructions. Estimate ingredient macros when amounts make that practical, and use them to estimate the recipe's per-serving totals; genuinely unknowable ingredient values may be null.
 - A recipe is still one food. Do not create separate foods or entries for its ingredients.
 - Do not add an addEntry operation. The user will review and save manually.
 
@@ -77,7 +78,7 @@ export const importFoodDraft = (current: FoodInput, json: string): FoodInput => 
 export const buildAiPrompt = (state: AppState, request: string): string => {
   const start = shiftDate(state.prefs.date, -6);
   const context = {
-    currentDate: new Date().toISOString().slice(0, 10),
+    currentDate: isoDate(),
     selectedDate: state.prefs.date,
     profile: { ...state.profile, weightLb: latestWeight(state), dailyNutritionGuide: nutritionTargets(state.profile) },
     library: state.foods,
@@ -93,7 +94,8 @@ Rules:
 - Keep food names free of quantities. Store amounts and units in serving or recipe ingredient fields.
 - Never delete anything.
 - Preserve known values unless the user asks to correct them.
-- Unknown detailed nutrients must be null, not 0.
+- When creating or completing a food, make a best-effort estimate for calories, proteinG, carbsG, fatG, and fiberG if exact nutrition is unavailable. Infer from typical portions, ingredients, preparation, brands, or restaurant data; core macros should not be left null merely because they are estimates.
+- For detailed nutrients beyond those core macros, estimate when reasonably supported; otherwise use null, not 0.
 - sugarG is total sugar; addedSugarG is added sugar only.
 - Recipes remain one food and one diary entry. Store ingredients and instructions in food.recipe; never log ingredients separately.
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { applyAiResponse, buildAiPrompt, buildFoodAiPrompt, importFoodDraft, parseAiResponse } from "../src/ai";
-import { createEntry, createQuickCalorieEntry, createState, normalizeFood, removeFoodFromLibrary } from "../src/model";
+import { createEntry, createQuickCalorieEntry, createState, moveDiaryEntry, normalizeFood, removeFoodFromLibrary } from "../src/model";
 import { calorieGuidance, nutritionTargets, totalsFor } from "../src/nutrition";
 import { exportBackup, parseBackup } from "../src/storage";
 import { calendarGrid, formatMonth, shiftMonth } from "../src/calendar";
@@ -24,6 +24,22 @@ const readyState = () => {
 };
 
 describe("nutrition domain", () => {
+  it("reorders foods within a meal and moves them across meals", () => {
+    const date = "2026-08-18";
+    const foods = ["Toast", "Coffee", "Soup"].map((name) => normalizeFood({ name, nutrition: { calories: 100 } }));
+    const toast = createEntry(foods[0]!, date, "breakfast");
+    const coffee = createEntry(foods[1]!, date, "breakfast");
+    const soup = createEntry(foods[2]!, date, "lunch");
+    const reordered = moveDiaryEntry([toast, coffee, soup], coffee.id, "breakfast", 0);
+    expect(reordered.map((entry) => entry.nameSnapshot)).toEqual(["Coffee", "Toast", "Soup"]);
+    const moved = moveDiaryEntry(reordered, toast.id, "lunch", 1);
+    expect(moved.map((entry) => [entry.nameSnapshot, entry.period])).toEqual([
+      ["Coffee", "breakfast"],
+      ["Soup", "lunch"],
+      ["Toast", "lunch"],
+    ]);
+  });
+
   it("calculates a bounded energy guide and coherent macro targets", () => {
     const state = readyState();
     const guidance = calorieGuidance(state.profile);
@@ -150,6 +166,8 @@ describe("AI bridge", () => {
     expect(prompt).toContain("CURRENT CONTEXT");
     expect(prompt).toContain("Log oatmeal for breakfast");
     expect(prompt).toContain("Return ONLY valid JSON");
+    expect(prompt).toContain("best-effort estimate");
+    expect(prompt).toContain("core macros should not be left null");
   });
 
   it("builds a food-only prompt with partial recipe context", () => {
@@ -158,6 +176,8 @@ describe("AI bridge", () => {
     expect(prompt).toContain("Taco bowls");
     expect(prompt).toContain("one food");
     expect(prompt).toContain("ONE serving");
+    expect(prompt).toContain("best-effort estimate");
+    expect(prompt).toContain("do not leave core macros blank");
   });
 
   it("fills a draft from upsertFood while preserving omitted user values", () => {

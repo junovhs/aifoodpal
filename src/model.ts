@@ -121,6 +121,21 @@ export interface AppState {
   prefs: { date: string };
 }
 
+export const moveDiaryEntry = (entries: Entry[], entryId: string, period: Period, index: number): Entry[] => {
+  const found = entries.find((entry) => entry.id === entryId);
+  if (!found) return entries;
+  const date = found.date;
+  const firstDayIndex = entries.findIndex((entry) => entry.date === date);
+  const moved = { ...found, period, updatedAt: new Date().toISOString() };
+  const groups = new Map(PERIODS.map((candidate) => [candidate, entries.filter((entry) => entry.date === date && entry.period === candidate && entry.id !== entryId)]));
+  const target = groups.get(period) ?? [];
+  target.splice(Math.max(0, Math.min(index, target.length)), 0, moved);
+  const reorderedDay = PERIODS.flatMap((candidate) => groups.get(candidate) ?? []);
+  const result = entries.filter((entry) => entry.date !== date);
+  result.splice(firstDayIndex < 0 ? result.length : firstDayIndex, 0, ...reorderedDay);
+  return result;
+};
+
 export type FoodInput = Partial<Omit<Food, "serving" | "nutrition" | "recipe">> & {
   serving?: Partial<Serving>;
   nutrition?: Partial<Nutrition> & { satFatG?: number | null };
