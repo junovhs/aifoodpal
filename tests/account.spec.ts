@@ -160,6 +160,7 @@ describe("Supabase account browser flow", () => {
     await vi.waitFor(() => expect(root.querySelector('form[data-account-form="sign-in"]')).not.toBeNull());
     expect(root.textContent).toContain("Welcome back");
     expect(root.querySelector('[data-account-action="close"]')).not.toBeNull();
+    expect(root.querySelector<HTMLButtonElement>('[data-account-action="close"]')?.type).toBe("button");
   });
 
   it("shows sign-in instead of onboarding on a first visit, and restores onboarding when dismissed", async () => {

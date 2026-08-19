@@ -103,7 +103,7 @@ export class AccountController {
   }
 
   private configuredModal(): string {
-    const close = `<button class="close" data-account-action="close" aria-label="Close account controls">${icon("X")}</button>`;
+    const close = `<button class="close" type="button" data-account-action="close" aria-label="Close account controls">${icon("X")}</button>`;
     const feedback = `${this.message ? `<div class="notice success" role="status">${icon("Check")}<span>${escapeHtml(this.message)}</span></div>` : ""}${this.error ? `<div class="notice warn" role="alert">${escapeHtml(this.error)}</div>` : ""}`;
     if (this.mode === "account" && this.session) {
       const email = this.session.user.email ?? "Signed in";
