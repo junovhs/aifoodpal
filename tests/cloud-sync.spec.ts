@@ -101,6 +101,28 @@ describe("CloudStateRepository", () => {
     expect((await waitForPhase(second, "synced")).revision).toBe(2);
   });
 
+  it("still offers migration to the device holding data after an empty device claimed the account", async () => {
+    const server = new FakeServer();
+    const phone = new CloudStateRepository(new FakeCloud(server, "user-1"), new MemoryRepository(createState("2026-08-18")), new MemoryStore(), new EventTarget());
+    connect(phone);
+    expect((await waitForPhase(phone, "synced")).revision).toBe(1);
+    expect(server.rows.get("user-1")?.state).toMatchObject({ profile: { onboardingComplete: false } });
+
+    const local = createState("2026-08-18");
+    local.profile.onboardingComplete = true;
+    local.profile.manualDailyGuide = 1800;
+    const desktop = new CloudStateRepository(new FakeCloud(server, "user-1"), new MemoryRepository(local), new MemoryStore(), new EventTarget());
+    connect(desktop);
+
+    const offered = await waitForPhase(desktop, "migration");
+    expect(offered.revision).toBe(1);
+    expect(desktop.load().profile.manualDailyGuide).toBe(1800);
+
+    await desktop.confirmMigration();
+    expect((await waitForPhase(desktop, "synced")).revision).toBe(2);
+    expect(server.rows.get("user-1")?.state).toMatchObject({ profile: { manualDailyGuide: 1800 } });
+  });
+
   it("clears the signed-out browser copy only after a confirmed migration succeeds", async () => {
     const server = new FakeServer();
     const local = createState("2026-08-18");

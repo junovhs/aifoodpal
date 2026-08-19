@@ -125,7 +125,6 @@ export class CloudStateRepository implements StateRepository {
     this.syncEnabled = true;
     this.readyForWrites = true;
     this.migrationInFlight = true;
-    this.revision = 0;
     this.setStatus("connecting", "Uploading this device’s daybook…");
     await this.flush();
   }
@@ -205,6 +204,14 @@ export class CloudStateRepository implements StateRepository {
         if (this.pending || this.localVersion !== versionAtRead) {
           this.revision = row.revision;
           this.enterConflict(this.pending ?? this.state);
+          return;
+        }
+        const device = cached ?? this.anonymous.load();
+        if (!hasMeaningfulData(migrateState(row.state)) && hasMeaningfulData(device)) {
+          this.revision = row.revision;
+          this.state = clone(device);
+          this.emitState();
+          this.setStatus("migration", "Choose whether to sync this device’s existing daybook", row.revision);
           return;
         }
         this.acceptCloud(row);
