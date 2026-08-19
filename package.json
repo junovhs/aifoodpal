@@ -16,6 +16,8 @@
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.5",
+    "jsdom": "^29.1.1",
+    "supabase": "^2.115.0",
     "typescript": "^5.9.2",
     "vite": "^7.1.2",
     "vitest": "^3.2.4"

@@ -1,6 +1,8 @@
 import { PGlite } from "@electric-sql/pglite";
 import { afterEach, describe, expect, it } from "vitest";
 import migration from "../supabase/migrations/20260819030000_create_daybooks.sql?raw";
+import callerIdMigration from "../supabase/migrations/20260819040000_daybook_caller_id_without_auth_schema.sql?raw";
+import conflictCodeMigration from "../supabase/migrations/20260819050000_daybook_conflict_status_code.sql?raw";
 import { readSupabaseConfig } from "../src/supabase";
 
 const userOne = "11111111-1111-4111-8111-111111111111";
@@ -21,6 +23,8 @@ const database = async (): Promise<PGlite> => {
       $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
   `);
   await db.exec(migration);
+  await db.exec(callerIdMigration);
+  await db.exec(conflictCodeMigration);
   await db.exec(`
     insert into auth.users (id) values ('${userOne}'), ('${userTwo}');
     insert into public.daybooks (user_id, state, revision) values
@@ -72,6 +76,8 @@ describe("daybooks row-level authorization", () => {
       set role migrator;
     `);
     await db.exec(migration);
+    await db.exec(callerIdMigration);
+    await db.exec(conflictCodeMigration);
     const ownership = await db.query<{ owner: string; migration_role_can_set_writer: boolean }>(`
       select pg_get_userbyid(proowner) as owner,
              pg_has_role('migrator', 'aifoodpal_daybook_writer', 'set') as migration_role_can_set_writer
@@ -79,6 +85,23 @@ describe("daybooks row-level authorization", () => {
       where proname = 'save_daybook'
     `);
     expect(ownership.rows).toEqual([{ owner: "aifoodpal_daybook_writer", migration_role_can_set_writer: false }]);
+  });
+
+  it("saves without any privilege on the auth schema", async () => {
+    const db = await database();
+    // Hosted Supabase owns the auth schema as supabase_admin, so the migration
+    // administrator cannot actually grant the writer role access to it.
+    await db.exec("revoke all on schema auth from aifoodpal_daybook_writer");
+    await db.exec("revoke all on function auth.uid() from aifoodpal_daybook_writer");
+    const usable = await db.query<{ auth_usage: boolean }>(
+      "select has_schema_privilege('aifoodpal_daybook_writer', 'auth', 'USAGE') as auth_usage",
+    );
+    expect(usable.rows).toEqual([{ auth_usage: false }]);
+    await authenticate(db, userOne);
+    const saved = await db.query<{ user_id: string; revision: number }>(
+      `select * from public.save_daybook(1, '${state("no-auth-schema")}'::jsonb)`,
+    );
+    expect(saved.rows[0]).toMatchObject({ user_id: userOne, revision: 2 });
   });
 
   it("shows authenticated users only their own aggregate", async () => {

@@ -30,7 +30,7 @@ class FakeServer {
     if (!this.online) throw Object.assign(new Error("offline"), { code: "NETWORK" });
     const current = this.rows.get(userId);
     if ((!current && expectedRevision !== 0) || (current && current.revision !== expectedRevision)) {
-      throw Object.assign(new Error("revision conflict"), { code: "40001" });
+      throw Object.assign(new Error("revision conflict"), { code: "PT409" });
     }
     const now = "2026-08-19T00:00:00Z";
     const row: DaybookRow = { user_id: userId, state: structuredClone(state) as unknown as Json, revision: (current?.revision ?? 0) + 1, created_at: current?.created_at ?? now, updated_at: now };

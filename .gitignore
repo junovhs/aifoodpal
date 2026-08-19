@@ -15,3 +15,4 @@ coverage/
 # semmap artifacts (regenerable, not committed - DEC-10)
 SEMMAP.md
 .semmap/
+supabase/.temp/

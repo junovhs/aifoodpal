@@ -79,7 +79,7 @@ const { error: staleError } = await a.instance.rpc("save_daybook", {
   expected_revision: savedA.revision,
   next_state: state("a", "stale"),
 });
-assert(staleError?.code === "40001", `Expected stale revision 40001, received ${staleError?.code ?? "no error"}.`);
+assert(staleError?.code === "PT409", `Expected stale revision PT409, received ${staleError?.code ?? "no error"}.`);
 assert(newerA.revision === loadedA.revision + 1, "Account A revision did not advance exactly once.");
 assert((await readOwn(b.instance))?.state?.verification?.owner === "b", "Account A activity changed account B's row.");
 

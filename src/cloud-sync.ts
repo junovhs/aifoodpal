@@ -158,7 +158,7 @@ export class CloudStateRepository implements StateRepository {
       this.writeUserCache(local);
       this.setStatus("synced", "This device’s copy is synced", saved.revision);
     } catch (error) {
-      if (errorCode(error) === "40001") this.enterConflict(this.conflictState ?? this.state);
+      if (errorCode(error) === "PT409") this.enterConflict(this.conflictState ?? this.state);
       else this.goOffline("Conflict resolution is waiting for a connection");
     }
   }
@@ -248,7 +248,7 @@ export class CloudStateRepository implements StateRepository {
           this.setStatus("synced", "All changes synced", saved.revision);
         } catch (error) {
           if (generation !== this.generation || this.session?.user.id !== userId) return;
-          if (errorCode(error) === "40001") this.enterConflict(next);
+          if (errorCode(error) === "PT409") this.enterConflict(next);
           else {
             this.pending = this.pending ?? next;
             this.goOffline("Offline changes are safe on this device");
