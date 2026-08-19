@@ -48,10 +48,11 @@ export const createSupabaseDaybookCloud = (client: SupabaseClient<Database>): Da
   },
   async saveDaybook(expectedRevision, state) {
     const rpc = client.rpc as unknown as (
+      this: SupabaseClient<Database>,
       name: "save_daybook",
       args: { expected_revision: number; next_state: Json },
     ) => Promise<{ data: DaybookRow | null; error: { code?: string; message: string } | null }>;
-    const { data, error } = await rpc("save_daybook", { expected_revision: expectedRevision, next_state: state as unknown as Json });
+    const { data, error } = await rpc.call(client, "save_daybook", { expected_revision: expectedRevision, next_state: state as unknown as Json });
     if (error) throw error;
     if (!data) throw new Error("Supabase returned no saved daybook.");
     return data;

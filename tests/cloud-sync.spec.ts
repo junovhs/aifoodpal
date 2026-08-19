@@ -1,6 +1,6 @@
-import type { AuthChangeEvent } from "@supabase/supabase-js";
+import type { AuthChangeEvent, SupabaseClient } from "@supabase/supabase-js";
 import { describe, expect, it } from "vitest";
-import { CloudStateRepository, type DaybookCloud, type SyncStatus } from "../src/cloud-sync";
+import { CloudStateRepository, createSupabaseDaybookCloud, type DaybookCloud, type SyncStatus } from "../src/cloud-sync";
 import { createState, type AppState } from "../src/model";
 import { migrateState, type StateRepository } from "../src/storage";
 import type { DaybookRow, Json } from "../src/supabase-database";
@@ -67,6 +67,30 @@ const waitForPhase = async (repository: CloudStateRepository, phase: SyncStatus[
   }
   throw new Error(`Timed out waiting for ${phase}; current phase is ${repository.getStatus().phase}`);
 };
+
+describe("Supabase daybook adapter", () => {
+  it("calls rpc with the Supabase client as its receiver", async () => {
+    const state = createState("2026-08-19");
+    const row: DaybookRow = {
+      user_id: "user-1",
+      state: state as unknown as Json,
+      revision: 3,
+      created_at: "2026-08-19T00:00:00Z",
+      updated_at: "2026-08-19T00:00:00Z",
+    };
+    const client = {
+      marker: "bound",
+      rpc(this: { marker: string }, name: string, args: unknown) {
+        expect(this.marker).toBe("bound");
+        expect(name).toBe("save_daybook");
+        expect(args).toMatchObject({ expected_revision: 2 });
+        return Promise.resolve({ data: row, error: null });
+      },
+    } as unknown as SupabaseClient;
+
+    await expect(createSupabaseDaybookCloud(client).saveDaybook(2, state)).resolves.toEqual(row);
+  });
+});
 
 describe("CloudStateRepository", () => {
   it("migrates once, loads on another device, advances revisions, and rejects stale writers", async () => {
