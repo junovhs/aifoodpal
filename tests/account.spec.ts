@@ -15,6 +15,11 @@ const session = (email: string): Session => ({
   user: { id: "11111111-1111-4111-8111-111111111111", aud: "authenticated", role: "authenticated", email, app_metadata: {}, user_metadata: {}, created_at: "2026-08-19T00:00:00Z" },
 } as Session);
 
+const memoryStore = () => {
+  const values = new Map<string, string>();
+  return { getItem: (k: string) => values.get(k) ?? null, setItem: (k: string, v: string) => { values.set(k, v); } };
+};
+
 describe("Supabase account browser flow", () => {
   beforeEach(() => {
     document.body.innerHTML = '<div id="account-root"></div>';
@@ -166,14 +171,13 @@ describe("Supabase account browser flow", () => {
     const root = document.querySelector<HTMLElement>("#account-root")!;
     new DaybookApp(root, { load: () => createState("2026-08-18"), save: vi.fn() }, account).start();
 
-    const onboardHost = (): HTMLElement => root.querySelector<HTMLElement>("[data-onboard-host]")!;
-    expect(onboardHost().style.display).toBe("none");
     await vi.waitFor(() => expect(root.querySelector('form[data-account-form="sign-in"]')).not.toBeNull());
-    expect(onboardHost().style.display).toBe("none");
+    expect(root.querySelector(".account-modal")).not.toBeNull();
+    expect(root.querySelector(".overlay")).toBeNull();
 
     root.querySelector<HTMLElement>('[data-account-action="close"]')!.click();
     expect(root.querySelector('form[data-account-form="sign-in"]')).toBeNull();
-    expect(onboardHost().style.display).toBe("");
+    expect(root.querySelector('form[data-form="onboarding"]')).not.toBeNull();
   });
 
   it("never shows the first-run form to a signed-in visitor whose cloud daybook cannot be loaded", async () => {
@@ -186,21 +190,41 @@ describe("Supabase account browser flow", () => {
       async saveDaybook() { throw new Error("not reached"); },
     };
     const root = document.querySelector<HTMLElement>("#account-root")!;
-    const repository = new CloudStateRepository(cloud, { load: () => createState("2026-08-18"), save: vi.fn() }, new Map() as never, new EventTarget());
+    const repository = new CloudStateRepository(cloud, { load: () => createState("2026-08-18"), save: vi.fn() }, memoryStore(), new EventTarget());
     new DaybookApp(root, repository, new AccountController(null)).start();
 
-    const host = (): HTMLElement => root.querySelector<HTMLElement>("[data-onboard-host]")!;
     await vi.waitFor(() => expect(repository.getStatus().phase).toBe("connecting"));
-    expect(host().style.display).toBe("none");
+    expect(root.querySelector(".overlay")).toBeNull();
 
     failRead?.(new Error("network down"));
     await vi.waitFor(() => expect(repository.getStatus().phase).toBe("offline"));
 
-    expect(host().style.display).toBe("none");
+    expect(root.querySelector(".overlay")).toBeNull();
     const modal = root.querySelector<HTMLElement>(".sync-modal");
     expect(modal).not.toBeNull();
     expect(modal!.textContent).toContain("Cloud unavailable");
     expect(root.querySelector('[data-sync-action="retry"]')).not.toBeNull();
+  });
+
+  it("keeps the migration decision reachable while onboarding is incomplete", async () => {
+    const local = createState("2026-08-18");
+    local.weights = [{ id: "w1", date: "2026-08-18", weightLb: 190, createdAt: "2026-08-18T00:00:00Z", updatedAt: "2026-08-18T00:00:00Z" }];
+    expect(local.profile.onboardingComplete).toBe(false);
+    const cloud: DaybookCloud = {
+      async getSession() { return { user: { id: "11111111-1111-4111-8111-111111111111" } }; },
+      onAuthStateChange() { /* initial getSession drives this test */ },
+      async readDaybook() { return null; },
+      async saveDaybook() { throw new Error("not reached"); },
+    };
+    const root = document.querySelector<HTMLElement>("#account-root")!;
+    const repository = new CloudStateRepository(cloud, { load: () => local, save: vi.fn() }, memoryStore(), new EventTarget());
+    new DaybookApp(root, repository, new AccountController(null)).start();
+
+    await vi.waitFor(() => expect(repository.getStatus().phase).toBe("migration"));
+    expect(root.querySelector(".overlay")).toBeNull();
+    const modal = root.querySelector<HTMLElement>(".sync-modal");
+    expect(modal).not.toBeNull();
+    expect(root.querySelector('[data-sync-action="migrate"]')).not.toBeNull();
   });
 
   it("stays on the diary in local mode where accounts are unavailable", async () => {

@@ -28,8 +28,6 @@ export class DaybookApp {
   private toastTimer?: number;
   private syncStatus?: SyncStatus;
   private syncOpen = false;
-  private accountGate = false;
-  private cloudGate = false;
 
   constructor(private readonly root: HTMLElement, private readonly repository: StateRepository, private readonly account?: AccountController) {
     this.state = repository.load();
@@ -68,17 +66,13 @@ export class DaybookApp {
   }
 
   private render(): void {
-    this.accountGate = this.account?.blocksApp() ?? false;
-    this.cloudGate = this.cloudPending();
     const brand = `<div class="wordmark"><span class="brandmark">${icon("NotebookTabs")}</span><span><b>AI</b>foodpal</span></div>`;
-    this.root.innerHTML = `<div class="shell"><aside class="side">${brand}${this.nav()}<div class="sidebottom">${icon("ShieldCheck")}<span>Private by default.<br>Stored in this browser.</span></div></aside><main class="main"><header class="top">${brand}<div class="top-actions"><button class="btn btn-icon" data-action="open-ai">${icon("Sparkles")}<span>AI bridge</span></button>${this.syncStatus ? `<div class="sync-host" data-sync-header>${this.syncHeaderHtml()}</div>` : ""}${this.account ? `<div class="account-host" data-account-header>${this.account.headerHtml()}</div>` : ""}</div></header><div class="view">${this.content()}</div></main></div>${this.nav(true)}${this.modalHtml()}${this.syncStatus ? `<div data-sync-modal>${this.syncModalHtml()}</div>` : ""}${this.account ? `<div data-account-modal>${this.account.modalHtml()}</div>` : ""}${this.state.profile.onboardingComplete ? "" : `<div data-onboard-host${this.accountGate || this.cloudGate ? ' style="display:none"' : ""}>${this.onboarding()}</div>`}<div class="toast" id="toast"></div>`;
+    this.root.innerHTML = `<div class="shell"><aside class="side">${brand}${this.nav()}<div class="sidebottom">${icon("ShieldCheck")}<span>Private by default.<br>Stored in this browser.</span></div></aside><main class="main"><header class="top">${brand}<div class="top-actions"><button class="btn btn-icon" data-action="open-ai">${icon("Sparkles")}<span>AI bridge</span></button>${this.syncStatus ? `<div class="sync-host" data-sync-header>${this.syncHeaderHtml()}</div>` : ""}${this.account ? `<div class="account-host" data-account-header>${this.account.headerHtml()}</div>` : ""}</div></header><div class="view">${this.content()}</div></main></div>${this.nav(true)}${this.modalHtml()}${this.syncStatus ? `<div data-sync-modal>${this.syncModalHtml()}</div>` : ""}${this.account ? `<div data-account-modal>${this.account.modalHtml()}</div>` : ""}<div class="toast" id="toast"></div>`;
     renderIcons(this.root);
   }
 
   private renderAccount(): void {
     if (!this.account) return;
-    this.accountGate = this.account.blocksApp();
-    this.toggleOnboarding();
     const header = this.root.querySelector<HTMLElement>("[data-account-header]");
     const modal = this.root.querySelector<HTMLElement>("[data-account-modal]");
     if (header) { header.innerHTML = this.account.headerHtml(); renderIcons(header); }
@@ -87,23 +81,10 @@ export class DaybookApp {
 
   private renderSync(): void {
     if (!this.syncStatus) return;
-    this.cloudGate = this.cloudPending();
-    this.toggleOnboarding();
     const header = this.root.querySelector<HTMLElement>("[data-sync-header]");
     const modal = this.root.querySelector<HTMLElement>("[data-sync-modal]");
     if (header) { header.innerHTML = this.syncHeaderHtml(); renderIcons(header); }
     if (modal) { modal.innerHTML = this.syncModalHtml(); renderIcons(modal); }
-  }
-
-  /** True while a signed-in visitor's cloud daybook is still unknown, so the app must not offer its own first-run form. */
-  private cloudPending(): boolean {
-    const phase = this.syncStatus?.phase;
-    return phase === "connecting" || phase === "offline";
-  }
-
-  private toggleOnboarding(): void {
-    const onboard = this.root.querySelector<HTMLElement>("[data-onboard-host]");
-    if (onboard) onboard.style.display = this.accountGate || this.cloudGate ? "none" : "";
   }
 
   private syncHeaderHtml(): string {
@@ -120,7 +101,7 @@ export class DaybookApp {
     if (status.phase === "migration") body += `<p class="sync-copy">This account has no cloud daybook yet. Upload the data already on this device so it can become the account’s first cloud copy? After it is safely uploaded, the signed-out local copy will be cleared.</p><div class="mfooter"><button class="btn" data-sync-action="decline">Not now</button><button class="btn-primary" data-sync-action="migrate">Use this device’s daybook</button></div>`;
     if (status.phase === "conflict") body += `<p class="sync-copy">Another device saved after this one last loaded. Choose the cloud copy, or explicitly replace it with the complete copy currently on this device.</p><div class="mfooter"><button class="btn" data-sync-action="use-cloud">Use newer cloud copy</button><button class="btn-primary" data-sync-action="use-local">Keep this device’s copy</button></div>`;
     if (status.phase === "offline") body += `<p class="sync-copy">You can keep logging. Changes are cached locally and will retry when the connection returns.</p><div class="mfooter"><button class="btn-primary" data-sync-action="retry">Try again</button></div>`;
-    return `<div class="modalback show sync-backdrop" data-sync-action="backdrop"><div class="modal sync-modal" role="dialog" aria-modal="true" aria-labelledby="sync-title"><div class="modalin"><div class="mhead"><div><div id="sync-title">Cloud sync</div><div class="tiny">Revision-safe account storage</div></div>${close}</div>${body}</div></div></div>`;
+    return `<div class="modalback show sync-backdrop" data-sync-action="backdrop"><div class="modal sync-modal" role="dialog" aria-modal="true" aria-labelledby="sync-title"><div class="modalin"><div class="mhead"><div><div id="sync-title">Cloud sync</div><div class="tiny">Revision-safe account storage</div></div>${close}</div>${body}</div></div>`;
   }
 
   private nav(bottom = false): string {
@@ -130,6 +111,7 @@ export class DaybookApp {
   }
 
   private content(): string {
+    if (!this.state.profile.onboardingComplete) return this.onboarding();
     if (this.view === "calendar") return this.calendar();
     if (this.view === "library") return this.library();
     if (this.view === "trend") return this.trend();
@@ -221,7 +203,7 @@ export class DaybookApp {
 
   private onboarding(): string {
     const p = this.state.profile;
-    return `<div class="overlay show"><div class="onboard"><div class="otop"><div class="wordmark"><span class="brandmark">${icon("NotebookTabs")}</span><span><b>AI</b>foodpal</span></div></div><div class="ocontent"><form data-form="onboarding"><h1 class="otitle">A small private record of your day.</h1><p class="ocopy">These basics create a starting guide. Nothing leaves this browser unless you export or copy it.</p><div class="two">${field("age", "age", p.age ?? "", "number", "min=18 max=120 required")}${field("height (inches)", "heightIn", p.heightIn ?? "", "number", "min=36 step=.1 required")}${field("current weight (lb)", "weightLb", p.weightLb ?? "", "number", "min=50 step=.1 required")}${field("goal weight (lb)", "goalWeightLb", p.goalWeightLb ?? "", "number", "min=50 step=.1")}</div><label class="field"><span>sex used by energy equation</span><select name="sex" required><option value="">choose</option><option value="female" ${p.sexForEquation === "female" ? "selected" : ""}>female</option><option value="male" ${p.sexForEquation === "male" ? "selected" : ""}>male</option></select></label><label class="field"><span>ordinary activity</span><select name="activity"><option value="1.4">mostly still</option><option value="1.6" selected>lightly moving</option><option value="1.8">regularly active</option><option value="2">very active</option><option value="2.2">exceptionally active</option></select></label><div class="notice">This is a planning aid, not medical advice.</div><div class="oactions"><span></span><button class="btn-primary">enter AIfoodpal</button></div></form></div></div></div>`;
+    return `<div class="onboard onboard-inline"><div class="otop"><div class="wordmark"><span class="brandmark">${icon("NotebookTabs")}</span><span><b>AI</b>foodpal</span></div></div><div class="ocontent"><form data-form="onboarding"><h1 class="otitle">A small private record of your day.</h1><p class="ocopy">These basics create a starting guide. Nothing leaves this browser unless you export or copy it.</p><div class="two">${field("age", "age", p.age ?? "", "number", "min=18 max=120 required")}${field("height (inches)", "heightIn", p.heightIn ?? "", "number", "min=36 step=.1 required")}${field("current weight (lb)", "weightLb", p.weightLb ?? "", "number", "min=50 step=.1 required")}${field("goal weight (lb)", "goalWeightLb", p.goalWeightLb ?? "", "number", "min=50 step=.1")}</div><label class="field"><span>sex used by energy equation</span><select name="sex" required><option value="">choose</option><option value="female" ${p.sexForEquation === "female" ? "selected" : ""}>female</option><option value="male" ${p.sexForEquation === "male" ? "selected" : ""}>male</option></select></label><label class="field"><span>ordinary activity</span><select name="activity"><option value="1.4">mostly still</option><option value="1.6" selected>lightly moving</option><option value="1.8">regularly active</option><option value="2">very active</option><option value="2.2">exceptionally active</option></select></label><div class="notice">This is a planning aid, not medical advice.</div><div class="oactions"><span></span><button class="btn-primary">enter AIfoodpal</button></div></form></div></div></div>`;
   }
 
   private modalHtml(): string {
