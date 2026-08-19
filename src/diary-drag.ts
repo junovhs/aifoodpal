@@ -348,6 +348,12 @@ export class DiaryDragController {
         delete springs._dropY;
         if (this.pendingSettle) {
           this.pendingSettle = false;
+          this.frame = null;
+          for (const element of this.shiftSprings.keys()) {
+            element.style.transform = "";
+            element.style.willChange = "";
+          }
+          this.shiftSprings.clear();
           this.settled();
           return;
         }
