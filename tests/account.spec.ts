@@ -3,6 +3,7 @@
 import type { AuthChangeEvent, Session } from "@supabase/supabase-js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AccountController } from "../src/account";
+import { CloudStateRepository, type DaybookCloud } from "../src/cloud-sync";
 import { DaybookApp } from "../src/app";
 import { createState } from "../src/model";
 
@@ -173,6 +174,33 @@ describe("Supabase account browser flow", () => {
     root.querySelector<HTMLElement>('[data-account-action="close"]')!.click();
     expect(root.querySelector('form[data-account-form="sign-in"]')).toBeNull();
     expect(onboardHost().style.display).toBe("");
+  });
+
+  it("never shows the first-run form to a signed-in visitor whose cloud daybook cannot be loaded", async () => {
+    let failRead: ((reason: Error) => void) | undefined;
+    const signedIn = session("person@example.com");
+    const cloud: DaybookCloud = {
+      async getSession() { return { user: { id: signedIn.user.id } }; },
+      onAuthStateChange() { /* the initial getSession drives this test */ },
+      readDaybook: () => new Promise((_resolve, reject) => { failRead = reject; }),
+      async saveDaybook() { throw new Error("not reached"); },
+    };
+    const root = document.querySelector<HTMLElement>("#account-root")!;
+    const repository = new CloudStateRepository(cloud, { load: () => createState("2026-08-18"), save: vi.fn() }, new Map() as never, new EventTarget());
+    new DaybookApp(root, repository, new AccountController(null)).start();
+
+    const host = (): HTMLElement => root.querySelector<HTMLElement>("[data-onboard-host]")!;
+    await vi.waitFor(() => expect(repository.getStatus().phase).toBe("connecting"));
+    expect(host().style.display).toBe("none");
+
+    failRead?.(new Error("network down"));
+    await vi.waitFor(() => expect(repository.getStatus().phase).toBe("offline"));
+
+    expect(host().style.display).toBe("none");
+    const modal = root.querySelector<HTMLElement>(".sync-modal");
+    expect(modal).not.toBeNull();
+    expect(modal!.textContent).toContain("Cloud unavailable");
+    expect(root.querySelector('[data-sync-action="retry"]')).not.toBeNull();
   });
 
   it("stays on the diary in local mode where accounts are unavailable", async () => {
