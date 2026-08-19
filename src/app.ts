@@ -28,6 +28,7 @@ export class DaybookApp {
   private toastTimer?: number;
   private syncStatus?: SyncStatus;
   private syncOpen = false;
+  private accountGate = false;
 
   constructor(private readonly root: HTMLElement, private readonly repository: StateRepository, private readonly account?: AccountController) {
     this.state = repository.load();
@@ -66,13 +67,17 @@ export class DaybookApp {
   }
 
   private render(): void {
+    this.accountGate = this.account?.blocksApp() ?? false;
     const brand = `<div class="wordmark"><span class="brandmark">${icon("NotebookTabs")}</span><span><b>AI</b>foodpal</span></div>`;
-    this.root.innerHTML = `<div class="shell"><aside class="side">${brand}${this.nav()}<div class="sidebottom">${icon("ShieldCheck")}<span>Private by default.<br>Stored in this browser.</span></div></aside><main class="main"><header class="top">${brand}<div class="top-actions"><button class="btn btn-icon" data-action="open-ai">${icon("Sparkles")}<span>AI bridge</span></button>${this.syncStatus ? `<div class="sync-host" data-sync-header>${this.syncHeaderHtml()}</div>` : ""}${this.account ? `<div class="account-host" data-account-header>${this.account.headerHtml()}</div>` : ""}</div></header><div class="view">${this.content()}</div></main></div>${this.nav(true)}${this.modalHtml()}${this.syncStatus ? `<div data-sync-modal>${this.syncModalHtml()}</div>` : ""}${this.account ? `<div data-account-modal>${this.account.modalHtml()}</div>` : ""}${this.state.profile.onboardingComplete ? "" : this.onboarding()}<div class="toast" id="toast"></div>`;
+    this.root.innerHTML = `<div class="shell"><aside class="side">${brand}${this.nav()}<div class="sidebottom">${icon("ShieldCheck")}<span>Private by default.<br>Stored in this browser.</span></div></aside><main class="main"><header class="top">${brand}<div class="top-actions"><button class="btn btn-icon" data-action="open-ai">${icon("Sparkles")}<span>AI bridge</span></button>${this.syncStatus ? `<div class="sync-host" data-sync-header>${this.syncHeaderHtml()}</div>` : ""}${this.account ? `<div class="account-host" data-account-header>${this.account.headerHtml()}</div>` : ""}</div></header><div class="view">${this.content()}</div></main></div>${this.nav(true)}${this.modalHtml()}${this.syncStatus ? `<div data-sync-modal>${this.syncModalHtml()}</div>` : ""}${this.account ? `<div data-account-modal>${this.account.modalHtml()}</div>` : ""}${this.state.profile.onboardingComplete ? "" : `<div data-onboard-host${this.accountGate ? ' style="display:none"' : ""}>${this.onboarding()}</div>`}<div class="toast" id="toast"></div>`;
     renderIcons(this.root);
   }
 
   private renderAccount(): void {
     if (!this.account) return;
+    this.accountGate = this.account.blocksApp();
+    const onboard = this.root.querySelector<HTMLElement>("[data-onboard-host]");
+    if (onboard) onboard.style.display = this.accountGate ? "none" : "";
     const header = this.root.querySelector<HTMLElement>("[data-account-header]");
     const modal = this.root.querySelector<HTMLElement>("[data-account-modal]");
     if (header) { header.innerHTML = this.account.headerHtml(); renderIcons(header); }

@@ -156,6 +156,25 @@ describe("Supabase account browser flow", () => {
     expect(root.querySelector('[data-account-action="close"]')).not.toBeNull();
   });
 
+  it("shows sign-in instead of onboarding on a first visit, and restores onboarding when dismissed", async () => {
+    const auth = {
+      onAuthStateChange: vi.fn(() => ({ data: { subscription: { id: "test", callback: vi.fn(), unsubscribe: vi.fn() } } })),
+      getSession: vi.fn(async () => ({ data: { session: null }, error: null })),
+    };
+    const account = new AccountController(auth as unknown as ConstructorParameters<typeof AccountController>[0]);
+    const root = document.querySelector<HTMLElement>("#account-root")!;
+    new DaybookApp(root, { load: () => createState("2026-08-18"), save: vi.fn() }, account).start();
+
+    const onboardHost = (): HTMLElement => root.querySelector<HTMLElement>("[data-onboard-host]")!;
+    expect(onboardHost().style.display).toBe("none");
+    await vi.waitFor(() => expect(root.querySelector('form[data-account-form="sign-in"]')).not.toBeNull());
+    expect(onboardHost().style.display).toBe("none");
+
+    root.querySelector<HTMLElement>('[data-account-action="close"]')!.click();
+    expect(root.querySelector('form[data-account-form="sign-in"]')).toBeNull();
+    expect(onboardHost().style.display).toBe("");
+  });
+
   it("stays on the diary in local mode where accounts are unavailable", async () => {
     const controller = new AccountController(null);
     const root = document.querySelector<HTMLElement>("#account-root")!;

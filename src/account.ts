@@ -18,6 +18,7 @@ const passwordField = (name: string, label: string, autocomplete: string): strin
 /** Owns the browser's email/password session UI without owning daybook persistence. */
 export class AccountController {
   private session: Session | null = null;
+  private restored = false;
   private mode: AccountMode | null = null;
   private busy = false;
   private message = "";
@@ -35,11 +36,21 @@ export class AccountController {
         const previousEmail = this.session?.user.email ?? "";
         const previousMode = this.mode;
         this.session = data.session;
+        this.restored = true;
         if (data.session && (this.mode === "sign-in" || this.mode === "sign-up" || this.mode === "forgot")) this.mode = "account";
         if (!data.session && this.mode === null) this.mode = "sign-in";
         if ((this.session?.user.email ?? "") !== previousEmail || this.mode !== previousMode) this.rerender();
       })
-      .catch(() => undefined);
+      .catch(() => {
+        this.restored = true;
+        this.rerender();
+      });
+  }
+
+  /** True while a configured deployment still owes the visitor the account gate, so the app defers its own overlays. */
+  blocksApp(): boolean {
+    if (!this.auth || this.session) return false;
+    return !this.restored || this.mode !== null;
   }
 
   headerHtml(): string {
