@@ -36,6 +36,7 @@ export class AccountController {
         const previousMode = this.mode;
         this.session = data.session;
         if (data.session && (this.mode === "sign-in" || this.mode === "sign-up" || this.mode === "forgot")) this.mode = "account";
+        if (!data.session && this.mode === null) this.mode = "sign-in";
         if ((this.session?.user.email ?? "") !== previousEmail || this.mode !== previousMode) this.rerender();
       })
       .catch(() => undefined);

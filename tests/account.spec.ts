@@ -139,6 +139,34 @@ describe("Supabase account browser flow", () => {
     expect(root.querySelector<HTMLInputElement>('form[data-account-form="sign-in"] input[name="email"]')).toBe(email);
     expect(email.value).toBe("unfinished@example.com");
   });
+
+  it("opens sign-in as the landing view when configured and no session exists", async () => {
+    const auth = {
+      onAuthStateChange: vi.fn(() => ({ data: { subscription: { id: "test", callback: vi.fn(), unsubscribe: vi.fn() } } })),
+      getSession: vi.fn(async () => ({ data: { session: null }, error: null })),
+    };
+    const controller = new AccountController(auth as unknown as ConstructorParameters<typeof AccountController>[0]);
+    const root = document.querySelector<HTMLElement>("#account-root")!;
+    const render = (): void => { root.innerHTML = `${controller.headerHtml()}${controller.modalHtml()}`; };
+    controller.start(render);
+    render();
+
+    await vi.waitFor(() => expect(root.querySelector('form[data-account-form="sign-in"]')).not.toBeNull());
+    expect(root.textContent).toContain("Welcome back");
+    expect(root.querySelector('[data-account-action="close"]')).not.toBeNull();
+  });
+
+  it("stays on the diary in local mode where accounts are unavailable", async () => {
+    const controller = new AccountController(null);
+    const root = document.querySelector<HTMLElement>("#account-root")!;
+    const render = (): void => { root.innerHTML = `${controller.headerHtml()}${controller.modalHtml()}`; };
+    controller.start(render);
+    render();
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(root.querySelector(".account-backdrop")).toBeNull();
+    expect(root.querySelector(".account-trigger")?.textContent).toContain("Cloud off");
+  });
 });
 
 const submit = (root: HTMLElement, kind: string, values: Record<string, string>): void => {
