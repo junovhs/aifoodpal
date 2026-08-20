@@ -108,7 +108,7 @@ button:disabled { cursor: wait; opacity: .58; transform: none; }
 .scale-labels .scale-segment strong { overflow: hidden; color: var(--text-soft); font-size: 10px; text-overflow: ellipsis; }
 .scale-labels .scale-segment small { font-size: 9px; white-space: nowrap; }
 .scale-sections .scale-segment > * { display: none; }
-.danger-text { color: var(--danger); }
+.budget-warning { display: block; margin-top: 3px; color: var(--danger); font-weight: 650; }
 .macros { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top: 23px; padding-top: 20px; border-top: 1px solid var(--line-soft); }
 .macro { display: grid; grid-template-columns: 56px minmax(0, 1fr); align-items: start; gap: 12px; min-width: 0; min-height: 97px; padding: 0 20px; }
 .macro:first-child { padding-left: 2px; }

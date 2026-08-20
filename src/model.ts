@@ -1,6 +1,6 @@
 import { formatQuantity, normalizeUnit, splitTrailingQuantity } from "./units";
 
-export const SCHEMA_VERSION = 1 as const;
+export const SCHEMA_VERSION = 2 as const;
 export const PERIODS = ["breakfast", "lunch", "dinner", "snacks"] as const;
 
 export type Period = (typeof PERIODS)[number];
@@ -125,6 +125,7 @@ export interface AppState {
   };
 }
 
+/** The effective snack reserve and any main-meal use of that reserve, expressed in calories and bar percentages. */
 export interface ProtectedSnackBudget {
   snackCalories: number;
   mainCalories: number;
@@ -133,6 +134,7 @@ export interface ProtectedSnackBudget {
   encroachmentPercent: number;
 }
 
+/** Converts a daily guide and opt-in snack reserve into renderable main-meal and encroachment allocations. */
 export const protectedSnackBudget = (dailyGuide: number, requestedSnackCalories: number, loggedMainCalories: number): ProtectedSnackBudget => {
   const guide = Math.max(0, dailyGuide);
   const snackCalories = Math.min(guide, Math.max(0, requestedSnackCalories));

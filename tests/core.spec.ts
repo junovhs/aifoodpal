@@ -143,12 +143,14 @@ describe("portions and saved combos", () => {
 describe("portable storage", () => {
   it("adds safe snack-budget defaults to existing saved state", () => {
     const legacy = createState("2026-08-17") as AppState;
+    (legacy as { schemaVersion: number }).schemaVersion = 1;
     delete (legacy.prefs as Partial<AppState["prefs"]>).protectedSnackBudgetEnabled;
     delete (legacy.prefs as Partial<AppState["prefs"]>).protectedSnackCalories;
     expect(parseBackup(JSON.stringify(legacy)).prefs).toMatchObject({
       protectedSnackBudgetEnabled: false,
       protectedSnackCalories: 200,
     });
+    expect(parseBackup(JSON.stringify(legacy)).schemaVersion).toBe(2);
   });
   it("round-trips an exported backup and preserves null nutrients", () => {
     const state = readyState();

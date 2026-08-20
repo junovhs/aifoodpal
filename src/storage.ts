@@ -16,8 +16,8 @@ export interface StateRepository {
 
 export const migrateState = (value: unknown): AppState => {
   if (!value || typeof value !== "object") throw new Error("Backup must be a JSON object.");
-  const input = value as Partial<AppState> & { preferences?: AppState["prefs"] };
-  if (input.schemaVersion !== SCHEMA_VERSION) throw new Error("This backup uses an unsupported schema version.");
+  const input = value as Omit<Partial<AppState>, "schemaVersion"> & { schemaVersion?: number; preferences?: AppState["prefs"] };
+  if (input.schemaVersion !== 1 && input.schemaVersion !== SCHEMA_VERSION) throw new Error("This backup uses an unsupported schema version.");
   const base = createState();
   const state: AppState = {
     ...base,

@@ -23,6 +23,7 @@ describe("protected snack budget", () => {
     expect(root.querySelector(".scale-labels .snacks")?.textContent).toContain("400 kcal");
     expect(root.querySelector<HTMLElement>(".scale-overrun")?.style.cssText).toContain("left: 80%");
     expect(root.querySelector(".summary-note")?.textContent).toContain("100 protected snack kcal used by main meals");
+    expect(root.querySelector(".summary-note")?.textContent).toContain("200 kcal remaining today");
     expect(root.querySelector<HTMLInputElement>('form[data-form="snack-budget"] input[name="enabled"]')?.checked).toBe(true);
   });
 
@@ -36,7 +37,7 @@ describe("protected snack budget", () => {
     form.querySelector<HTMLInputElement>('input[name="enabled"]')!.checked = true;
     form.querySelector<HTMLInputElement>('input[name="calories"]')!.value = "350";
 
-    form.dispatchEvent(new SubmitEvent("submit", { bubbles: true, cancelable: true }));
+    form.requestSubmit();
 
     expect(state.prefs).toMatchObject({ protectedSnackBudgetEnabled: true, protectedSnackCalories: 350 });
     expect(save).toHaveBeenCalledOnce();
@@ -52,5 +53,33 @@ describe("protected snack budget", () => {
 
     expect(root.querySelector(".scale-overrun")).toBeNull();
     expect(root.querySelector(".summary-note")?.textContent).toContain("300 kcal remaining today");
+  });
+
+  it("rejects a snack reserve that would consume the whole daily guide", () => {
+    const state = createState("2026-08-20");
+    Object.assign(state.profile, { onboardingComplete: true, manualDailyGuide: 2000 });
+    const save = vi.fn<(state: AppState) => void>();
+    const root = document.createElement("main");
+    new DaybookApp(root, { load: () => state, save }).start();
+    const form = root.querySelector<HTMLFormElement>('form[data-form="snack-budget"]')!;
+    form.querySelector<HTMLInputElement>('input[name="enabled"]')!.checked = true;
+    form.querySelector<HTMLInputElement>('input[name="calories"]')!.value = "2000";
+
+    form.requestSubmit();
+
+    expect(state.prefs.protectedSnackBudgetEnabled).toBe(false);
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("clamps a saved reserve when the daily guide later becomes smaller", () => {
+    const state = createState("2026-08-20");
+    Object.assign(state.profile, { onboardingComplete: true, manualDailyGuide: 300 });
+    Object.assign(state.prefs, { protectedSnackBudgetEnabled: true, protectedSnackCalories: 400 });
+    const root = document.createElement("main");
+
+    new DaybookApp(root, { load: () => state, save: vi.fn() }).start();
+
+    expect(state.prefs.protectedSnackCalories).toBe(299);
+    expect(root.querySelector<HTMLInputElement>('input[name="calories"]')?.value).toBe("299");
   });
 });

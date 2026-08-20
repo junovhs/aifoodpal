@@ -32,6 +32,7 @@ export class DaybookApp {
 
   constructor(private readonly root: HTMLElement, private readonly repository: StateRepository, private readonly account?: AccountController) {
     this.state = repository.load();
+    this.normalizeSnackBudget();
     this.calendarMonth = this.state.prefs.date.slice(0, 7);
   }
 
@@ -44,7 +45,7 @@ export class DaybookApp {
     if (this.repository instanceof CloudStateRepository) {
       this.syncStatus = this.repository.getStatus();
       this.repository.connect(
-        (state) => { this.state = state; this.render(); },
+        (state) => { this.state = state; this.normalizeSnackBudget(); this.render(); },
         (status) => {
           this.syncStatus = status;
           if (status.phase === "migration" || status.phase === "conflict" || status.phase === "offline") this.syncOpen = true;
@@ -61,6 +62,7 @@ export class DaybookApp {
   }
 
   private save(message?: string): void {
+    this.normalizeSnackBudget();
     this.repository.save(this.state);
     this.render();
     if (message) this.showToast(message);
@@ -70,6 +72,13 @@ export class DaybookApp {
     const brand = `<div class="wordmark"><span class="brandmark">${icon("NotebookTabs")}</span><span><b>AI</b>foodpal</span></div>`;
     this.root.innerHTML = `<div class="shell"><aside class="side">${brand}${this.nav()}<div class="sidebottom">${icon("ShieldCheck")}<span>Private by default.<br>Stored in this browser.</span></div></aside><main class="main"><header class="top">${brand}<div class="top-actions"><button class="btn btn-icon" data-action="open-ai">${icon("Sparkles")}<span>AI bridge</span></button>${this.syncStatus ? `<div class="sync-host" data-sync-header>${this.syncHeaderHtml()}</div>` : ""}${this.account ? `<div class="account-host" data-account-header>${this.account.headerHtml()}</div>` : ""}</div></header><div class="view">${this.content()}</div></main></div>${this.nav(true)}${this.modalHtml()}${this.syncStatus ? `<div data-sync-modal>${this.syncModalHtml()}</div>` : ""}${this.account ? `<div data-account-modal>${this.account.modalHtml()}</div>` : ""}<div class="toast" id="toast"></div>`;
     renderIcons(this.root);
+  }
+
+  private normalizeSnackBudget(): void {
+    const guide = dailyCalorieGuide(this.state.profile);
+    if (this.state.prefs.protectedSnackBudgetEnabled && guide) {
+      this.state.prefs.protectedSnackCalories = Math.min(this.state.prefs.protectedSnackCalories, Math.max(1, Math.floor(guide) - 1));
+    }
   }
 
   private renderAccount(): void {
@@ -160,7 +169,8 @@ export class DaybookApp {
     const segmentCalories = guide && budget ? [budget.mainCalories / 3, budget.mainCalories / 3, budget.mainCalories / 3, budget.snackCalories] : [];
     const segmentLabels = PERIODS.map((period, index) => `<span class="scale-segment ${period}" style="width:${period === "snacks" ? snackSegmentWidth : mainSegmentWidth}%"><strong>${period}</strong>${guide ? `<small>${fmt(segmentCalories[index])} kcal</small>` : ""}</span>`).join("");
     const overrun = snackProtected && budget?.encroachmentCalories ? `<span class="scale-overrun" style="left:${budget.mainPercent}%;width:${budget.encroachmentPercent}%" aria-label="Main meals used ${fmt(budget.encroachmentCalories)} protected snack calories"></span>` : "";
-    return `<div class="page-intro"><div><span class="eyebrow">Daily diary</span><h1>${formatDate(date, true)}</h1></div><div class="datebar"><button class="icon-btn" data-action="date" data-days="-1" aria-label="Previous day">${icon("ChevronLeft")}</button><button class="today-btn" data-action="today">Today</button><button class="icon-btn" data-action="date" data-days="1" aria-label="Next day">${icon("ChevronRight")}</button></div></div><section class="card summary"><div class="summary-top"><div><div class="summary-label">Calories logged</div><div class="guide"><span class="big">${fmt(totals.calories)}</span><span>${guide ? `of ${fmt(guide)} kcal` : "kcal"}</span></div></div><div class="summary-actions"><button class="btn btn-icon" data-action="open-quick">${icon("Gauge")}<span>Quick Add</span></button><button class="btn-primary btn-icon" data-action="choose-food">${icon("Plus")}<span>Add food</span></button></div></div><div class="calorie-scale" aria-label="${fmt(pct)} percent of calorie guide"><div class="scale-track"><div class="scale-sections">${segmentLabels}</div><div class="scale-fill" style="width:${pct}%"></div>${overrun}<span class="scale-flame" style="left:${pct}%">${icon("Flame")}</span></div><div class="scale-labels">${segmentLabels}</div></div><div class="summary-note">${remaining == null ? "Add your baseline to create a daily guide." : snackProtected && budget?.encroachmentCalories ? `<strong class="danger-text">${fmt(budget.encroachmentCalories)} protected snack kcal used by main meals</strong>` : `<strong>${fmt(remaining)}</strong> kcal remaining today`}</div><div class="macros">${this.macro("protein", totals.proteinG, targets?.proteinG)}${this.macro("carbs", totals.carbsG, targets?.carbsG)}${this.macro("fat", totals.fatG, targets?.fatG)}${this.macro("fiber", totals.fiberG, targets?.fiberG)}</div></section><div class="section-heading"><span>Meals</span><span>${this.state.entries.filter((entry) => entry.date === date).length} entries</span></div>${meals}`;
+    const budgetWarning = snackProtected && budget?.encroachmentCalories ? `<span class="budget-warning">${fmt(budget.encroachmentCalories)} protected snack kcal used by main meals</span>` : "";
+    return `<div class="page-intro"><div><span class="eyebrow">Daily diary</span><h1>${formatDate(date, true)}</h1></div><div class="datebar"><button class="icon-btn" data-action="date" data-days="-1" aria-label="Previous day">${icon("ChevronLeft")}</button><button class="today-btn" data-action="today">Today</button><button class="icon-btn" data-action="date" data-days="1" aria-label="Next day">${icon("ChevronRight")}</button></div></div><section class="card summary"><div class="summary-top"><div><div class="summary-label">Calories logged</div><div class="guide"><span class="big">${fmt(totals.calories)}</span><span>${guide ? `of ${fmt(guide)} kcal` : "kcal"}</span></div></div><div class="summary-actions"><button class="btn btn-icon" data-action="open-quick">${icon("Gauge")}<span>Quick Add</span></button><button class="btn-primary btn-icon" data-action="choose-food">${icon("Plus")}<span>Add food</span></button></div></div><div class="calorie-scale" aria-label="${fmt(pct)} percent of calorie guide"><div class="scale-track"><div class="scale-sections">${segmentLabels}</div><div class="scale-fill" style="width:${pct}%"></div>${overrun}<span class="scale-flame" style="left:${pct}%">${icon("Flame")}</span></div><div class="scale-labels">${segmentLabels}</div></div><div class="summary-note">${remaining == null ? "Add your baseline to create a daily guide." : `<strong>${fmt(remaining)}</strong> kcal remaining today${budgetWarning}`}</div><div class="macros">${this.macro("protein", totals.proteinG, targets?.proteinG)}${this.macro("carbs", totals.carbsG, targets?.carbsG)}${this.macro("fat", totals.fatG, targets?.fatG)}${this.macro("fiber", totals.fiberG, targets?.fiberG)}</div></section><div class="section-heading"><span>Meals</span><span>${this.state.entries.filter((entry) => entry.date === date).length} entries</span></div>${meals}`;
   }
 
   private macro(label: string, value: number | null, target?: number): string {
@@ -173,7 +183,9 @@ export class DaybookApp {
     const entries = this.state.entries.filter((entry) => entry.date === date && entry.period === period);
     const total = totalsFor(this.state, date, period);
     const glyph: Record<Period, Parameters<typeof icon>[0]> = { breakfast: "Coffee", lunch: "Sun", dinner: "Moon", snacks: "Apple" };
-    const snackBudget = period === "snacks" ? `<form class="snack-budget" data-form="snack-budget"><label class="snack-budget-toggle"><input type="checkbox" name="enabled" ${this.state.prefs.protectedSnackBudgetEnabled ? "checked" : ""}><span><strong>Protect snack calories</strong><small>Warn when main meals use this reserve.</small></span></label><label class="snack-budget-amount"><span>Save</span><input type="number" name="calories" min="1" step="10" inputmode="numeric" value="${this.state.prefs.protectedSnackCalories}" aria-label="Calories to save for snacks"><span>kcal</span></label><button class="tiny-btn" type="submit">Save</button></form>` : "";
+    const guide = dailyCalorieGuide(this.state.profile);
+    const snackBudgetMax = guide ? `max="${Math.max(1, Math.floor(guide) - 1)}"` : "";
+    const snackBudget = period === "snacks" ? `<form class="snack-budget" data-form="snack-budget"><label class="snack-budget-toggle"><input type="checkbox" name="enabled" ${this.state.prefs.protectedSnackBudgetEnabled ? "checked" : ""}><span><strong>Protect snack calories</strong><small>Warn when main meals use this reserve.</small></span></label><label class="snack-budget-amount"><span>Save</span><input type="number" name="calories" min="1" ${snackBudgetMax} step="1" inputmode="numeric" value="${this.state.prefs.protectedSnackCalories}" aria-label="Calories to save for snacks"><span>kcal</span></label><button class="tiny-btn" type="submit">Save</button></form>` : "";
     return `<section class="mealgroup card ${entries.length ? "has-entries" : ""}" data-period="${period}"><div class="mealhead"><div class="mealidentity"><span class="meal-period-icon ${period}">${icon(glyph[period])}</span><div><div class="meal-label">Meal</div><div class="mealname">${period}</div><div class="mealsum">${fmt(total.calories)} kcal · ${fmt(total.proteinG, 1)}p · ${fmt(total.carbsG, 1)}c · ${fmt(total.fatG, 1)}f</div></div></div><button class="icon-btn subtle" data-action="choose-food" data-period="${period}" aria-label="Add ${period}">${icon("Plus")}</button></div>${snackBudget}<div class="entrylist">${entries.map((entry) => this.entryHtml(entry)).join("")}</div></section>`;
   }
 
@@ -438,6 +450,8 @@ export class DaybookApp {
     const enabled = data.get("enabled") === "on";
     const calories = Math.round(getNumber(data, "calories") ?? this.state.prefs.protectedSnackCalories);
     if (enabled && calories < 1) throw new Error("Save at least 1 calorie for snacks.");
+    const guide = dailyCalorieGuide(this.state.profile);
+    if (enabled && guide && calories >= guide) throw new Error(`Save fewer than ${fmt(guide)} calories for snacks.`);
     this.state.prefs.protectedSnackBudgetEnabled = enabled;
     this.state.prefs.protectedSnackCalories = Math.max(1, calories);
     this.save(enabled ? `${this.state.prefs.protectedSnackCalories} snack calories protected` : "snack calorie protection off");
