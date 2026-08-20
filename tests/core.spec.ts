@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { applyAiResponse, buildAiPrompt, buildFoodAiPrompt, importFoodDraft, parseAiResponse } from "../src/ai";
-import { createEntry, createQuickCalorieEntry, createState, moveDiaryEntry, normalizeFood, removeFoodFromLibrary } from "../src/model";
+import { createEntry, createQuickCalorieEntry, createState, moveDiaryEntry, normalizeFood, protectedSnackBudget, removeFoodFromLibrary, type AppState } from "../src/model";
 import { calorieGuidance, nutritionTargets, totalsFor } from "../src/nutrition";
 import { exportBackup, parseBackup } from "../src/storage";
 import { calendarGrid, formatMonth, shiftMonth } from "../src/calendar";
@@ -24,6 +24,15 @@ const readyState = () => {
 };
 
 describe("nutrition domain", () => {
+  it("measures when main meals consume a protected snack reserve", () => {
+    expect(protectedSnackBudget(2000, 400, 1700)).toEqual({
+      snackCalories: 400,
+      mainCalories: 1600,
+      mainPercent: 80,
+      encroachmentCalories: 100,
+      encroachmentPercent: 5,
+    });
+  });
   it("reorders foods within a meal and moves them across meals", () => {
     const date = "2026-08-18";
     const foods = ["Toast", "Coffee", "Soup"].map((name) => normalizeFood({ name, nutrition: { calories: 100 } }));
@@ -132,6 +141,15 @@ describe("portions and saved combos", () => {
 });
 
 describe("portable storage", () => {
+  it("adds safe snack-budget defaults to existing saved state", () => {
+    const legacy = createState("2026-08-17") as AppState;
+    delete (legacy.prefs as Partial<AppState["prefs"]>).protectedSnackBudgetEnabled;
+    delete (legacy.prefs as Partial<AppState["prefs"]>).protectedSnackCalories;
+    expect(parseBackup(JSON.stringify(legacy)).prefs).toMatchObject({
+      protectedSnackBudgetEnabled: false,
+      protectedSnackCalories: 200,
+    });
+  });
   it("round-trips an exported backup and preserves null nutrients", () => {
     const state = readyState();
     state.foods.push(normalizeFood({ name: "Soup", nutrition: { calories: 220, proteinG: 8, carbsG: 30, fatG: 7, sodiumMg: null } }));

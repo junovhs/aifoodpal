@@ -118,8 +118,34 @@ export interface AppState {
   foods: Food[];
   entries: Entry[];
   weights: Weight[];
-  prefs: { date: string };
+  prefs: {
+    date: string;
+    protectedSnackBudgetEnabled: boolean;
+    protectedSnackCalories: number;
+  };
 }
+
+export interface ProtectedSnackBudget {
+  snackCalories: number;
+  mainCalories: number;
+  mainPercent: number;
+  encroachmentCalories: number;
+  encroachmentPercent: number;
+}
+
+export const protectedSnackBudget = (dailyGuide: number, requestedSnackCalories: number, loggedMainCalories: number): ProtectedSnackBudget => {
+  const guide = Math.max(0, dailyGuide);
+  const snackCalories = Math.min(guide, Math.max(0, requestedSnackCalories));
+  const mainCalories = Math.max(0, guide - snackCalories);
+  const encroachmentCalories = Math.min(snackCalories, Math.max(0, loggedMainCalories - mainCalories));
+  return {
+    snackCalories,
+    mainCalories,
+    mainPercent: guide ? mainCalories / guide * 100 : 0,
+    encroachmentCalories,
+    encroachmentPercent: guide ? encroachmentCalories / guide * 100 : 0,
+  };
+};
 
 export const moveDiaryEntry = (entries: Entry[], entryId: string, period: Period, index: number): Entry[] => {
   const found = entries.find((entry) => entry.id === entryId);
@@ -337,6 +363,6 @@ export const createState = (date = isoDate()): AppState => {
     foods: [],
     entries: [],
     weights: [],
-    prefs: { date },
+    prefs: { date, protectedSnackBudgetEnabled: false, protectedSnackCalories: 200 },
   };
 };
