@@ -22,6 +22,7 @@ const labelPayload = {
   name: "Greek yogurt",
   brand: "Fage",
   serving: { amount: 170, unit: "g", description: "1 container (170 g)" },
+  portion: { amount: 170, unit: "g" },
   nutrition: { calories: 100, proteinG: 18, carbsG: 6, fatG: 0, fiberG: 0, sugarG: 6, addedSugarG: 0, saturatedFatG: 0, transFatG: 0, sodiumMg: 65 },
   sourceType: "label",
   confidence: "high",
@@ -45,7 +46,7 @@ describe("capture response schema", () => {
     const nodes = objectNodes(schema);
 
     expect(nodes.map(([path]) => path)).toEqual([
-      "root", "root.serving", "root.nutrition", "root.recipe", "root.recipe.ingredients[]",
+      "root", "root.serving", "root.portion", "root.nutrition", "root.recipe", "root.recipe.ingredients[]",
     ]);
     for (const [path, node] of nodes) {
       expect(node.additionalProperties, `${path} must be closed`).toBe(false);
@@ -96,6 +97,7 @@ describe("buildCapturePrompt", () => {
     expect(prompt).toContain("amount 55");
     expect(prompt).toContain("amount 0.67, not amount 2");
     expect(prompt).toContain("keep the printed text in serving.description");
+    expect(prompt).toContain("exactly one printed serving");
   });
 
   it("refuses to name a food after the panel heading", () => {
@@ -115,6 +117,10 @@ describe("buildCapturePrompt", () => {
     expect(prompt).toContain("it's lamb, not beef, and it was fatty");
     expect(prompt).toContain("Treat it as authoritative");
     expect(prompt).toContain("Do not return null for calories");
+    expect(prompt).toContain("normally 100 g");
+    expect(prompt).toContain("Put the estimated amount eaten in portion");
+    expect(prompt).toContain("Never put the estimated amount eaten in serving");
+    expect(prompt).toContain("same unit as serving");
   });
 
   it("bounds a runaway note", () => {
@@ -135,6 +141,7 @@ describe("validateCapturePayload", () => {
       name: "Greek yogurt",
       brand: "Fage",
       serving: { amount: 170, unit: "g" },
+      portion: { amount: 170, unit: "g" },
       nutrition: { calories: 100, proteinG: 18, sodiumMg: 65 },
       sourceType: "label",
     });
@@ -156,6 +163,8 @@ describe("validateCapturePayload", () => {
     ["a missing name", { ...labelPayload, name: "  " }],
     ["a non-numeric calorie count", { ...labelPayload, nutrition: { ...labelPayload.nutrition, calories: "100" } }],
     ["a zero serving amount", { ...labelPayload, serving: { ...labelPayload.serving, amount: 0 } }],
+    ["a zero portion amount", { ...labelPayload, portion: { ...labelPayload.portion, amount: 0 } }],
+    ["an incompatible portion unit", { ...labelPayload, portion: { amount: 1, unit: "container" } }],
     ["a non-object reply", ["not", "a", "food"]],
   ])("refuses %s rather than half-applying it", (_label, payload) => {
     expect(() => validateCapturePayload(payload)).toThrowError(expect.objectContaining({ name: "CaptureContractError", code: "invalid-shape" }));

@@ -1,6 +1,6 @@
 import { supabase, supabaseConfig } from "./supabase";
-import { validateCapturePayload, type CaptureMode } from "./ai-capture";
-import type { FoodInput } from "./model";
+import { validateCapturePayload, type CapturedFood, type CaptureMode } from "./ai-capture";
+import type { FoodInput, Portion } from "./model";
 
 /** Why a capture could not be completed, mirroring the function's codes plus client-only cases. */
 export type CaptureErrorCode =
@@ -33,9 +33,12 @@ export interface CaptureRequest {
 
 /** A validated food draft plus what is left of the caller's allowance. */
 export interface CaptureResult {
-  food: FoodInput;
+  food: CapturedFood;
   remaining: { today: number; month: number };
 }
+
+/** A food draft keeps the one-time portion until confirmation, but normalizeFood never persists it. */
+export type CapturedFoodDraft = FoodInput & { portion: Portion };
 
 /** Sends one prepared photo for interpretation; injected into the food editor so tests can fake it. */
 export type CaptureFoodClient = (request: CaptureRequest) => Promise<CaptureResult>;
@@ -78,7 +81,7 @@ export const captureFoodViaSupabase: CaptureFoodClient = async (request) => {
     throw new CaptureError("ai-unavailable", "The server sent an unreadable reply.");
   }
 
-  const body = payload as Partial<{ ok: boolean; code: CaptureErrorCode; error: string; food: FoodInput; remaining: { today: number; month: number } }>;
+  const body = payload as Partial<{ ok: boolean; code: CaptureErrorCode; error: string; food: CapturedFood; remaining: { today: number; month: number } }>;
   if (!body.ok || !body.food) {
     throw new CaptureError(body.code ?? "ai-unavailable", body.error ?? "Photo capture failed. Try again.");
   }
@@ -94,17 +97,19 @@ export const captureFoodViaSupabase: CaptureFoodClient = async (request) => {
  * A null or absent value never erases something the user already knows: the model returns
  * null for "not stated on the panel", which must not wipe a figure typed by hand.
  */
-export const captureToFoodDraft = (current: FoodInput, payload: unknown): FoodInput => {
+export const captureToFoodDraft = (current: FoodInput, payload: unknown): CapturedFoodDraft => {
   const incoming = validateCapturePayload(payload);
+  const { portion, ...incomingFood } = incoming;
   const nutrition: Record<string, unknown> = { ...(current.nutrition ?? {}) };
   for (const [key, value] of Object.entries(incoming.nutrition ?? {})) {
     if (value !== null && value !== undefined) nutrition[key] = value;
     else if (!(key in nutrition)) nutrition[key] = null;
   }
 
-  const merged: FoodInput = {
+  const merged: CapturedFoodDraft = {
     ...current,
-    ...incoming,
+    ...incomingFood,
+    portion,
     brand: incoming.brand ?? current.brand ?? null,
     notes: incoming.notes ?? current.notes ?? null,
     serving: { ...(current.serving ?? {}), ...(incoming.serving ?? {}) },

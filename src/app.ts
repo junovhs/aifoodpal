@@ -585,9 +585,13 @@ export class DaybookApp {
       return false;
     }
     if (!result.found || this.modal?.kind !== "food") return false;
+    const portion = {
+      amount: result.food.serving?.amount ?? 1,
+      unit: result.food.serving?.unit ?? "serving",
+    };
     this.modal = {
       ...this.modal,
-      draft: captureToFoodDraft(draft, result.food),
+      draft: captureToFoodDraft(draft, { ...result.food, portion }),
       capturing: undefined,
       captureNote: note,
       aiMessage: "Found in the free product database. No AI capture used.",

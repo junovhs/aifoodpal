@@ -2,12 +2,13 @@
 
 import { describe, expect, it } from "vitest";
 import { captureToFoodDraft } from "../src/capture-client";
-import type { FoodInput } from "../src/model";
+import { normalizeFood, servingsForPortion, type FoodInput } from "../src/model";
 
 const labelPayload = {
   name: "Greek yogurt",
   brand: "Fage",
   serving: { amount: 170, unit: "g", description: "1 container (170 g)" },
+  portion: { amount: 170, unit: "g" },
   nutrition: { calories: 100, proteinG: 18, carbsG: 6, fatG: 0, fiberG: 0, sugarG: 6, addedSugarG: 0, saturatedFatG: 0, transFatG: 0, sodiumMg: 65 },
   sourceType: "label",
   confidence: "high",
@@ -24,6 +25,7 @@ describe("captureToFoodDraft", () => {
     expect(merged.id).toBe("food_1");
     expect(merged.name).toBe("Greek yogurt");
     expect(merged.nutrition?.calories).toBe(100);
+    expect(merged.portion).toEqual({ amount: 170, unit: "g" });
   });
 
   it("does not invent an id for a food that has none", () => {
@@ -51,5 +53,27 @@ describe("captureToFoodDraft", () => {
     const merged = captureToFoodDraft({ name: "Lamb stew" }, { ...labelPayload, nutrition: { ...labelPayload.nutrition, transFatG: null } });
 
     expect(merged.nutrition?.transFatG).toBeNull();
+  });
+
+  it("keeps an estimated portion separate from the reusable library serving", () => {
+    const draft = captureToFoodDraft({}, {
+      ...labelPayload,
+      name: "Pan-seared sirloin steak",
+      serving: { amount: 100, unit: "g", description: "100 g" },
+      portion: { amount: 40, unit: "g" },
+      sourceType: "estimate",
+    });
+    const food = normalizeFood(draft);
+
+    expect(food.serving).toEqual({ amount: 100, unit: "g", description: "100 g" });
+    expect("portion" in food).toBe(false);
+    expect(servingsForPortion(draft.portion, food.serving)).toBeCloseTo(0.4);
+  });
+
+  it("maps a label's default portion to exactly one serving", () => {
+    const draft = captureToFoodDraft({}, labelPayload);
+    const food = normalizeFood(draft);
+
+    expect(servingsForPortion(draft.portion, food.serving)).toBe(1);
   });
 });

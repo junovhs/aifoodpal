@@ -1,4 +1,4 @@
-import { formatQuantity, normalizeUnit, splitTrailingQuantity } from "./units";
+import { formatQuantity, normalizeUnit, servingMultiplier, splitTrailingQuantity } from "./units";
 
 export const SCHEMA_VERSION = 2 as const;
 export const PERIODS = ["breakfast", "lunch", "dinner", "snacks"] as const;
@@ -23,9 +23,12 @@ export interface Nutrition {
   sodiumMg: number | null;
 }
 
-export interface Serving {
+export interface Portion {
   amount: number;
   unit: string;
+}
+
+export interface Serving extends Portion {
   description: string;
 }
 
@@ -368,3 +371,7 @@ export const createState = (date = isoDate()): AppState => {
     prefs: { date, protectedSnackBudgetEnabled: false, protectedSnackCalories: 200 },
   };
 };
+
+/** Convert the amount eaten now into the multiplier stored by a diary entry. */
+export const servingsForPortion = (portion: Portion, serving: Serving): number =>
+  servingMultiplier(portion.amount, portion.unit, serving);

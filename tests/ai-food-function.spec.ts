@@ -6,6 +6,7 @@ const modelReply = JSON.stringify({
   name: "Greek yogurt",
   brand: "Fage",
   serving: { amount: 170, unit: "g", description: "1 container (170 g)" },
+  portion: { amount: 170, unit: "g" },
   nutrition: { calories: 100, proteinG: 18, carbsG: 6, fatG: 0, fiberG: 0, sugarG: 6, addedSugarG: 0, saturatedFatG: 0, transFatG: 0, sodiumMg: 65 },
   sourceType: "label",
   confidence: "high",
@@ -39,7 +40,12 @@ describe("ai-food request handling", () => {
     expect(result.status).toBe(200);
     expect(result.body).toMatchObject({
       ok: true,
-      food: { name: "Greek yogurt", nutrition: { calories: 100 } },
+      food: {
+        name: "Greek yogurt",
+        serving: { amount: 170, unit: "g" },
+        portion: { amount: 170, unit: "g" },
+        nutrition: { calories: 100 },
+      },
       remaining: { today: 39, month: 499 },
     });
     expect(dependencies.consumeCredit).toHaveBeenCalledWith("label");
@@ -103,13 +109,27 @@ describe("ai-food request handling", () => {
   });
 
   it("refuses a reply that does not match the contract instead of returning a partial draft", async () => {
-    const dependencies = deps({ generate: vi.fn(async () => JSON.stringify({ name: "Mystery", serving: { amount: 1, unit: "serving" } })) as AiFoodDeps["generate"] });
+    const dependencies = deps({ generate: vi.fn(async () => JSON.stringify({ name: "Mystery", serving: { amount: 1, unit: "serving" }, portion: { amount: 1, unit: "serving" } })) as AiFoodDeps["generate"] });
 
     const result = await handleAiFood(request(), dependencies);
 
     expect(result.status).toBe(502);
     expect(result.body).toMatchObject({ ok: false, code: "ai-invalid" });
     expect((result.body as { error: string }).error).toContain("nutrition");
+  });
+
+  it("refuses a portion that cannot map to the canonical serving", async () => {
+    const incompatibleReply = JSON.stringify({
+      ...JSON.parse(modelReply),
+      portion: { amount: 1, unit: "container" },
+    });
+    const dependencies = deps({ generate: vi.fn(async () => incompatibleReply) as AiFoodDeps["generate"] });
+
+    const result = await handleAiFood(request(), dependencies);
+
+    expect(result.status).toBe(502);
+    expect(result.body).toMatchObject({ ok: false, code: "ai-invalid" });
+    expect((result.body as { error: string }).error).toContain("portion.unit must match serving.unit");
   });
 
   it("refuses unparseable text from the AI", async () => {

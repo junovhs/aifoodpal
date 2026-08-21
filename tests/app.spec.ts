@@ -90,6 +90,7 @@ describe("food photo capture", () => {
     name: "Greek yogurt",
     brand: "Fage",
     serving: { amount: 170, unit: "g", description: "1 container (170 g)" },
+    portion: { amount: 170, unit: "g" },
     nutrition: { calories: 100, proteinG: 18, carbsG: 6, fatG: 0, fiberG: 0, sugarG: 6, addedSugarG: 0, saturatedFatG: 0, transFatG: 0, sodiumMg: 65 },
     sourceType: "label",
     confidence: "high",

@@ -16,6 +16,7 @@ export interface CapturedFood {
   name: string;
   brand: string | null;
   serving: { amount: number; unit: string; description: string };
+  portion: { amount: number; unit: string };
   nutrition: Record<string, number | null>;
   sourceType: CaptureSourceType;
   confidence: CaptureConfidence;
@@ -76,7 +77,7 @@ const nutritionProperties = Object.fromEntries(
 export const CAPTURE_RESPONSE_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["name", "brand", "serving", "nutrition", "sourceType", "confidence", "notes", "recipe"],
+  required: ["name", "brand", "serving", "portion", "nutrition", "sourceType", "confidence", "notes", "recipe"],
   properties: {
     name: { type: "string", description: "The food's identity only. Never include a quantity." },
     brand: nullableString,
@@ -88,6 +89,15 @@ export const CAPTURE_RESPONSE_SCHEMA = {
         amount: { type: "number" },
         unit: { type: "string", description: "tsp, tbsp, fl oz, cup, ml, l, g, kg, oz, lb, serving, piece, slice, or container." },
         description: { type: "string" },
+      },
+    },
+    portion: {
+      type: "object",
+      additionalProperties: false,
+      required: ["amount", "unit"],
+      properties: {
+        amount: { type: "number", description: "The amount eaten now, expressed in portion.unit." },
+        unit: { type: "string", description: "Must exactly match serving.unit so the portion always converts to a diary multiplier." },
       },
     },
     nutrition: {
@@ -181,6 +191,13 @@ export const validateCapturePayload = (value: unknown): CapturedFood => {
   if (amount <= 0) fail("serving.amount must be greater than zero.");
   if (typeof serving.unit !== "string" || serving.unit.trim().length === 0) fail("serving.unit must be a non-empty string.");
 
+  if (!isRecord(record.portion)) fail("The reply is missing portion information.");
+  const portion = record.portion as Record<string, unknown>;
+  const portionAmount = readNumber(portion.amount, "portion.amount");
+  if (portionAmount <= 0) fail("portion.amount must be greater than zero.");
+  if (typeof portion.unit !== "string" || portion.unit.trim().length === 0) fail("portion.unit must be a non-empty string.");
+  if (portion.unit.trim() !== serving.unit.trim()) fail("portion.unit must match serving.unit.");
+
   if (!isRecord(record.nutrition)) fail("The reply is missing nutrition information.");
   const source = record.nutrition as Record<string, unknown>;
   const calories = readNumber(source.calories, "nutrition.calories");
@@ -197,6 +214,7 @@ export const validateCapturePayload = (value: unknown): CapturedFood => {
     name: name.trim(),
     brand: readNullableString(record.brand, "brand"),
     serving: { amount, unit: (serving.unit as string).trim(), description: typeof serving.description === "string" ? serving.description : "" },
+    portion: { amount: portionAmount, unit: (portion.unit as string).trim() },
     nutrition,
     sourceType,
     confidence,
@@ -235,7 +253,9 @@ export const parseCapturePayload = (json: string): CapturedFood => {
 };
 
 const SHARED_RULES = `Rules:
-- Everything you return describes ONE serving. Never multiply by the number of servings shown.
+- serving is the canonical reusable unit stored with the library food. portion is the amount eaten now. Never reuse one figure as the other.
+- Express portion in the same unit as serving. Convert the amount when the user's note uses a different unit.
+- Nutrition describes exactly one canonical serving, not the portion. The app applies the portion as a multiplier when it logs the diary entry.
 - The name is the food's identity only. Quantities belong in serving.amount and serving.unit, never in the name.
 - Normalize the unit to one of: tsp, tbsp, fl oz, cup, ml, l, g, kg, oz, lb, serving, piece, slice, container.
 - sugarG is TOTAL sugar; addedSugarG is ADDED sugar only.
@@ -245,6 +265,7 @@ const LABEL_RULES = `This photo is a printed nutrition facts panel.
 
 - Transcribe what the panel states. Do not estimate, and do not substitute typical values for the food.
 - Serving size: when the panel gives both a household measure and a metric weight, put the metric weight in serving.amount and serving.unit (for "2/3 cup (55g)" that is amount 55, unit "g") and keep the printed text in serving.description. Grams are unambiguous; household measures are not.
+- Set portion to exactly one printed serving unless the user's note says they ate a different amount.
 - If only a household measure is printed, express any fraction as a decimal: "2/3 cup" is amount 0.67, not amount 2.
 - The food's name is the product's name as printed on the packaging. Never name it after a heading on the panel such as "Nutrition Facts" or "Supplement Facts". If no product name appears anywhere in the photo, set name to exactly "Unnamed food" and let the user fill it in — do not invent one and do not fall back to a heading.
 - Read the gram and milligram figures, not the % Daily Value column.
@@ -255,8 +276,10 @@ const ESTIMATE_RULES = `This photo is prepared food, not a label. Estimate its n
 
 - Judge the portion from visible cues: plate and utensil size, and how the food is heaped.
 - Account for how it was cooked — oil, butter, sauces, and visible fat all count.
+- Set serving to a clean reusable unit: normally 100 g, or 1 piece or 1 container when that is the food's natural unit. Never put the estimated amount eaten in serving.
+- Put the estimated amount eaten in portion. Scale nutrition to describe one canonical serving so the portion multiplier produces the nutrition eaten now.
 - Estimate every core macro. Do not return null for calories, protein, carbs, fat, or fiber merely because the figure is an estimate.
-- Describe the portion you assumed in serving.description, so the figures can be checked.
+- Describe the canonical serving in serving.description, so the library unit can be checked.
 - Set sourceType to "estimate" or "restaurant". Set confidence honestly; "low" is the right answer for an ambiguous plate.`;
 
 /**
