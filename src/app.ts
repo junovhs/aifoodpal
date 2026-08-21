@@ -35,6 +35,7 @@ const measurementList = (): string => `<datalist id="measurement-units">${UNIT_O
 export class DaybookApp {
   private state: AppState;
   private view: View = "day";
+  private mealPeriod?: Period;
   private calendarMonth: string;
   private modal: Modal = null;
   private toastTimer?: number;
@@ -91,7 +92,7 @@ export class DaybookApp {
 
   private render(): void {
     const brand = `<div class="wordmark"><span class="brandmark">${icon("NotebookTabs")}</span><span><b>AI</b>foodpal</span></div>`;
-    this.root.innerHTML = `<div class="shell"><aside class="side">${brand}${this.nav()}<div class="sidebottom">${icon("ShieldCheck")}<span>Private by default.<br>Stored in this browser.</span></div></aside><main class="main"><header class="top">${brand}<div class="top-actions">${this.account ? `<div class="account-host" data-account-header>${this.account.headerHtml()}</div>` : ""}</div></header><div class="view" data-scroll-pane>${this.content()}</div>${this.nav(true)}</main></div>${this.modalHtml()}${this.syncStatus ? `<div data-sync-modal>${this.syncModalHtml()}</div>` : ""}${this.account ? `<div data-account-modal>${this.account.modalHtml()}</div>` : ""}<div class="toast" id="toast"></div>`;
+    this.root.innerHTML = `<div class="shell"><aside class="side">${brand}${this.nav()}<div class="sidebottom">${icon("ShieldCheck")}<span>Private by default.<br>Stored in this browser.</span></div></aside><main class="main"><header class="top">${brand}<div class="top-actions">${this.account ? `<div class="account-host" data-account-header>${this.account.headerHtml()}</div>` : ""}</div></header><div class="view ${this.view === "day" && !this.mealPeriod ? "today-view" : ""}" data-scroll-pane>${this.content()}</div>${this.nav(true)}</main></div>${this.modalHtml()}${this.syncStatus ? `<div data-sync-modal>${this.syncModalHtml()}</div>` : ""}${this.account ? `<div data-account-modal>${this.account.modalHtml()}</div>` : ""}<div class="toast" id="toast"></div>`;
     renderIcons(this.root);
   }
 
@@ -151,6 +152,7 @@ export class DaybookApp {
 
   private content(): string {
     if (!this.state.profile.onboardingComplete) return this.onboarding();
+    if (this.view === "day" && this.mealPeriod) return this.mealView(this.mealPeriod);
     if (this.view === "calendar") return this.calendar();
     if (this.view === "library") return this.library();
     if (this.view === "trend") return this.trend();
@@ -185,29 +187,38 @@ export class DaybookApp {
     const snackTotal = totalsFor(this.state, date, "snacks").calories;
     const snackProtected = Boolean(guide && this.state.prefs.protectedSnackBudgetEnabled);
     const budget = guide ? protectedSnackBudget(guide, snackProtected ? this.state.prefs.protectedSnackCalories : guide / 4, totals.calories - snackTotal) : null;
-    const mainSegmentWidth = budget ? budget.mainPercent / 3 : 25;
-    const snackSegmentWidth = budget ? 100 - budget.mainPercent : 25;
-    const segmentCalories = guide && budget ? [budget.mainCalories / 3, budget.mainCalories / 3, budget.mainCalories / 3, budget.snackCalories] : [];
-    const segmentLabels = PERIODS.map((period, index) => `<span class="scale-segment ${period}" style="width:${period === "snacks" ? snackSegmentWidth : mainSegmentWidth}%"><strong>${period}</strong>${guide ? `<small>${fmt(segmentCalories[index])} kcal</small>` : ""}</span>`).join("");
-    const overrun = snackProtected && budget?.encroachmentCalories ? `<span class="scale-overrun" style="left:${budget.mainPercent}%;width:${budget.encroachmentPercent}%" aria-label="Main meals used ${fmt(budget.encroachmentCalories)} protected snack calories"></span>` : "";
-    const budgetWarning = snackProtected && budget?.encroachmentCalories ? `<span class="budget-warning">${fmt(budget.encroachmentCalories)} protected snack kcal used by main meals</span>` : "";
-    return `<div class="page-intro"><div><span class="eyebrow">Daily diary</span><h1>${formatDate(date, true)}</h1></div><div class="datebar"><button class="icon-btn" data-action="date" data-days="-1" aria-label="Previous day">${icon("ChevronLeft")}</button><button class="today-btn" data-action="today">Today</button><button class="icon-btn" data-action="date" data-days="1" aria-label="Next day">${icon("ChevronRight")}</button></div></div><section class="card summary"><div class="summary-top"><div><div class="summary-label">Calories logged</div><div class="guide"><span class="big">${fmt(totals.calories)}</span><span>${guide ? `of ${fmt(guide)} kcal` : "kcal"}</span></div></div><div class="summary-actions"><button class="btn btn-icon" data-action="open-quick">${icon("Gauge")}<span>Quick Add</span></button><button class="btn-primary btn-icon" data-action="choose-food">${icon("Plus")}<span>Add food</span></button></div></div><div class="calorie-scale" aria-label="${fmt(pct)} percent of calorie guide"><div class="scale-track"><div class="scale-sections">${segmentLabels}</div><div class="scale-fill" style="width:${pct}%"></div>${overrun}<span class="scale-flame" style="left:${pct}%">${icon("Flame")}</span></div><div class="scale-labels">${segmentLabels}</div></div><div class="summary-note">${remaining == null ? "Add your baseline to create a daily guide." : `<strong>${fmt(remaining)}</strong> kcal remaining today${budgetWarning}`}</div><div class="macros">${this.macro("protein", totals.proteinG, targets?.proteinG)}${this.macro("carbs", totals.carbsG, targets?.carbsG)}${this.macro("fat", totals.fatG, targets?.fatG)}${this.macro("fiber", totals.fiberG, targets?.fiberG)}</div></section><div class="section-heading"><span>Meals</span><span>${this.state.entries.filter((entry) => entry.date === date).length} entries</span></div>${meals}`;
+    const budgetWarning = snackProtected && budget?.encroachmentCalories
+      ? `<div class="today-warning">${fmt(budget.encroachmentCalories)} protected snack kcal used by main meals</div>`
+      : "";
+    const guideLine = guide ? `${fmt(totals.calories)} of ${fmt(guide)} kcal` : `${fmt(totals.calories)} kcal logged`;
+    return `<div class="today-screen"><div class="today-date"><button class="icon-btn" data-action="date" data-days="-1" aria-label="Previous day">${icon("ChevronLeft")}</button><h1>${formatDate(date, true)}</h1><button class="icon-btn" data-action="date" data-days="1" aria-label="Next day">${icon("ChevronRight")}</button><button class="today-btn" data-action="today">Today</button></div><section class="today-hero" aria-label="Daily nutrition summary"><div class="today-remaining"><strong>${remaining == null ? "—" : fmt(remaining)}</strong><span>kcal remaining</span></div><div class="today-progress" role="progressbar" aria-label="${guideLine}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${fmt(pct)}"><span style="width:${pct}%"></span></div><div class="today-progress-label">${guideLine}</div>${budgetWarning}<div class="macros">${this.macro("protein", totals.proteinG, targets?.proteinG)}${this.macro("carbs", totals.carbsG, targets?.carbsG)}${this.macro("fat", totals.fatG, targets?.fatG)}${this.macro("fiber", totals.fiberG, targets?.fiberG)}</div></section><div class="today-meals" aria-label="Meals">${meals}</div><button class="btn-primary btn-icon today-add" data-action="choose-food">${icon("Plus")}<span>Add food</span></button></div>`;
   }
 
   private macro(label: string, value: number | null, target?: number): string {
     const pct = target && value != null ? Math.min(100, value / target * 100) : 0;
-    const glyph: Record<string, Parameters<typeof icon>[0]> = { protein: "Dumbbell", carbs: "Wheat", fat: "Droplets", fiber: "Leaf" };
-    return `<div class="macro ${label}"><span class="macro-icon">${icon(glyph[label] ?? "Gauge")}</span><div class="macro-content"><div class="k">${label}</div><div class="v">${fmt(value, 1)} <small>g</small></div>${target ? `<div class="macro-target">of ${fmt(target)} g</div>` : ""}<div class="macroline"><div style="width:${pct}%"></div></div></div></div>`;
+    const short: Record<string, string> = { protein: "P", carbs: "C", fat: "F", fiber: "Fi" };
+    return `<div class="macro ${label}" aria-label="${label}: ${fmt(value, 1)} of ${target ? fmt(target) : "unknown"} grams"><span class="macro-key">${short[label] ?? label}</span><div class="macro-content"><div class="macro-values"><strong>${fmt(value, 1)}</strong><span>/${target ? fmt(target) : "—"} g</span></div><div class="macroline"><div style="width:${pct}%"></div></div></div></div>`;
   }
 
   private meal(period: Period, date: string): string {
-    const entries = this.state.entries.filter((entry) => entry.date === date && entry.period === period);
     const total = totalsFor(this.state, date, period);
     const glyph: Record<Period, Parameters<typeof icon>[0]> = { breakfast: "Coffee", lunch: "Sun", dinner: "Moon", snacks: "Apple" };
+    const calories = total.calories > 0 ? `${fmt(total.calories)} kcal` : "—";
+    return `<button class="meal-row" data-action="open-meal" data-period="${period}" aria-label="Open ${period}, ${calories}"><span class="meal-period-icon ${period}">${icon(glyph[period])}</span><span class="mealname">${period}</span><span class="mealsum">${calories}</span>${icon("ChevronRight")}</button>`;
+  }
+
+  private snackBudgetForm(): string {
     const guide = dailyCalorieGuide(this.state.profile);
     const snackBudgetMax = guide ? `max="${Math.max(1, Math.floor(guide) - 1)}"` : "";
-    const snackBudget = period === "snacks" ? `<form class="snack-budget" data-form="snack-budget"><label class="snack-budget-toggle"><input type="checkbox" name="enabled" ${this.state.prefs.protectedSnackBudgetEnabled ? "checked" : ""}><span><strong>Protect snack calories</strong><small>Warn when main meals use this reserve.</small></span></label><label class="snack-budget-amount"><span>Save</span><input type="number" name="calories" min="1" ${snackBudgetMax} step="1" inputmode="numeric" value="${this.state.prefs.protectedSnackCalories}" aria-label="Calories to save for snacks"><span>kcal</span></label><button class="tiny-btn" type="submit">Save</button></form>` : "";
-    return `<section class="mealgroup card ${entries.length ? "has-entries" : ""}" data-period="${period}"><div class="mealhead"><div class="mealidentity"><span class="meal-period-icon ${period}">${icon(glyph[period])}</span><div><div class="meal-label">Meal</div><div class="mealname">${period}</div><div class="mealsum">${fmt(total.calories)} kcal · ${fmt(total.proteinG, 1)}p · ${fmt(total.carbsG, 1)}c · ${fmt(total.fatG, 1)}f</div></div></div><button class="icon-btn subtle" data-action="choose-food" data-period="${period}" aria-label="Add ${period}">${icon("Plus")}</button></div>${snackBudget}<div class="entrylist">${entries.map((entry) => this.entryHtml(entry)).join("")}</div></section>`;
+    return `<form class="snack-budget card" data-form="snack-budget"><label class="snack-budget-toggle"><input type="checkbox" name="enabled" ${this.state.prefs.protectedSnackBudgetEnabled ? "checked" : ""}><span><strong>Protect snack calories</strong><small>Warn when main meals use this reserve.</small></span></label><label class="snack-budget-amount"><span>Save</span><input type="number" name="calories" min="1" ${snackBudgetMax} step="1" inputmode="numeric" value="${this.state.prefs.protectedSnackCalories}" aria-label="Calories to save for snacks"><span>kcal</span></label><button class="tiny-btn" type="submit">Save</button></form>`;
+  }
+
+  /** Preserve access to existing entries until UX-06 replaces this compatibility meal view. */
+  private mealView(period: Period): string {
+    const date = this.state.prefs.date;
+    const entries = this.state.entries.filter((entry) => entry.date === date && entry.period === period);
+    const total = totalsFor(this.state, date, period);
+    return `<div class="meal-view"><div class="meal-view-head"><button class="icon-btn" data-action="back-today" aria-label="Back to Today">${icon("ChevronLeft")}</button><h1>${period}</h1><span>${fmt(total.calories)} kcal</span></div><section class="meal-view-list card" data-period="${period}"><div class="entrylist">${entries.map((entry) => this.entryHtml(entry)).join("")}</div>${entries.length ? "" : `<div class="empty">Nothing logged for ${period}.</div>`}</section><button class="btn-primary btn-icon meal-view-add" data-action="choose-food" data-period="${period}">${icon("Plus")}<span>Add to ${period}</span></button></div>`;
   }
 
   private entryHtml(entry: AppState["entries"][number]): string {
@@ -249,7 +260,7 @@ export class DaybookApp {
     const profile = this.state.profile;
     const guidance = calorieGuidance(profile);
     const sync = this.syncStatus ? `<span class="sync-settings-host" data-sync-settings>${this.syncSettingsHtml()}</span>` : "";
-    return `<div class="head"><div><span class="eyebrow">Preferences</span><h1 class="title">Settings</h1><p class="subtitle">Plan, portability, and privacy.</p></div></div><form data-form="settings" class="card pad stack"><div class="two">${field("daily calorie guide", "manualDailyGuide", profile.manualDailyGuide ?? "", "number", "min=500 placeholder=automatic")}${field("activity multiplier", "activityPAL", profile.activityPAL, "number", "min=1.2 max=2.4 step=.1")}${field(`goal weight (${this.weightUnit()})`, "goalWeight", this.displayWeight(profile.goalWeightLb) ?? "", "number", "step=.1")}${field("weekly pace (lb)", "rateLbWeek", profile.rateLbWeek, "number", "min=0 step=.25")}</div><label class="field"><span>goal</span><select name="goalType"><option value="lose" ${profile.goalType === "lose" ? "selected" : ""}>lose</option><option value="maintain" ${profile.goalType === "maintain" ? "selected" : ""}>maintain</option><option value="gain" ${profile.goalType === "gain" ? "selected" : ""}>gain</option></select></label><div class="notice">${guidance.ok ? `Automatic estimate: ${fmt(guidance.target)} kcal/day${guidance.weeks ? ` · roughly ${fmt(guidance.weeks)} weeks` : ""}.` : html(guidance.reason)}</div><button class="btn-primary" type="submit">save plan</button></form><section class="section"><p class="label">services & data</p><div class="card settings"><button class="setting" data-action="open-ai"><span>AI bridge</span><span class="tiny">copy / paste</span></button>${sync}<button class="setting" data-action="open-backup"><span>backup & restore</span><span class="tiny">portable JSON</span></button><button class="setting" data-action="onboard"><span>edit baseline</span><span class="tiny">profile setup</span></button></div></section>`;
+    return `<div class="head"><div><span class="eyebrow">Preferences</span><h1 class="title">Settings</h1><p class="subtitle">Plan, portability, and privacy.</p></div></div><form data-form="settings" class="card pad stack"><div class="two">${field("daily calorie guide", "manualDailyGuide", profile.manualDailyGuide ?? "", "number", "min=500 placeholder=automatic")}${field("activity multiplier", "activityPAL", profile.activityPAL, "number", "min=1.2 max=2.4 step=.1")}${field(`goal weight (${this.weightUnit()})`, "goalWeight", this.displayWeight(profile.goalWeightLb) ?? "", "number", "step=.1")}${field("weekly pace (lb)", "rateLbWeek", profile.rateLbWeek, "number", "min=0 step=.25")}</div><label class="field"><span>goal</span><select name="goalType"><option value="lose" ${profile.goalType === "lose" ? "selected" : ""}>lose</option><option value="maintain" ${profile.goalType === "maintain" ? "selected" : ""}>maintain</option><option value="gain" ${profile.goalType === "gain" ? "selected" : ""}>gain</option></select></label><div class="notice">${guidance.ok ? `Automatic estimate: ${fmt(guidance.target)} kcal/day${guidance.weeks ? ` · roughly ${fmt(guidance.weeks)} weeks` : ""}.` : html(guidance.reason)}</div><button class="btn-primary" type="submit">save plan</button></form><section class="section"><p class="label">snack plan</p>${this.snackBudgetForm()}</section><section class="section"><p class="label">services & data</p><div class="card settings"><button class="setting" data-action="open-ai"><span>AI bridge</span><span class="tiny">copy / paste</span></button>${sync}<button class="setting" data-action="open-backup"><span>backup & restore</span><span class="tiny">portable JSON</span></button><button class="setting" data-action="onboard"><span>edit baseline</span><span class="tiny">profile setup</span></button></div></section>`;
   }
 
   private onboarding(): string {
@@ -326,7 +337,9 @@ export class DaybookApp {
     const button = (event.target as Element).closest<HTMLElement>("[data-action]");
     if (!button) return;
     const action = button.dataset.action;
-    if (action === "view") { this.view = button.dataset.view as View; if (this.view === "calendar") this.calendarMonth = this.state.prefs.date.slice(0, 7); this.render(); }
+    if (action === "view") { this.view = button.dataset.view as View; this.mealPeriod = undefined; if (this.view === "calendar") this.calendarMonth = this.state.prefs.date.slice(0, 7); this.render(); }
+    if (action === "open-meal" && PERIODS.includes(button.dataset.period as Period)) { this.mealPeriod = button.dataset.period as Period; this.render(); }
+    if (action === "back-today") { this.mealPeriod = undefined; this.render(); }
     if (action === "date") { this.state.prefs.date = shiftDate(this.state.prefs.date, Number(button.dataset.days)); this.save(); }
     if (action === "today") { this.state.prefs.date = isoDate(); this.save(); }
     if (action === "calendar-month") { this.calendarMonth = shiftMonth(this.calendarMonth, Number(button.dataset.months)); this.render(); }

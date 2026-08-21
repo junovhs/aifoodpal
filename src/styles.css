@@ -433,3 +433,48 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); backgro
 @media (max-width: 390px) {
   .ai-actions { grid-template-columns: 1fr; }
 }
+
+/* Today is the one dashboard that must fit the iPhone 11 Safari budget without scrolling. */
+.view.today-view { overflow: hidden; padding-bottom: max(8px, env(safe-area-inset-bottom)); }
+.today-screen { display: grid; grid-template-rows: 44px minmax(176px, 1fr) auto 52px; gap: 8px; height: 100%; min-height: 0; }
+.today-date { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px auto; align-items: center; gap: 4px; }
+.today-date h1 { overflow: hidden; margin: 0; font: 600 19px/1.1 Georgia, "Times New Roman", serif; letter-spacing: -.025em; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
+.today-date .icon-btn { width: 44px; min-height: 44px; border-color: transparent; background: transparent; }
+.today-date .today-btn { min-height: 44px; }
+.today-hero { display: grid; align-content: center; min-height: 0; padding: 10px 18px 12px; overflow: hidden; border: 1px solid var(--line); border-radius: 18px; background: radial-gradient(circle at 90% 0, var(--accent-soft), transparent 11rem), var(--panel); box-shadow: var(--shadow-sm); }
+.today-remaining { display: grid; justify-items: center; line-height: 1; }
+.today-remaining strong { font: 650 clamp(43px, 11vw, 58px)/.92 Georgia, "Times New Roman", serif; letter-spacing: -.055em; font-variant-numeric: tabular-nums; }
+.today-remaining span { margin-top: 5px; color: var(--text-soft); font-size: 11px; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; }
+.today-progress { height: 8px; margin-top: 12px; overflow: hidden; border-radius: 99px; background: var(--panel-muted); }
+.today-progress > span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--accent), oklch(0.62 0.18 47)); transition: width .35s var(--ease); }
+.today-progress-label { margin-top: 4px; color: var(--muted); font-size: 10px; text-align: center; font-variant-numeric: tabular-nums; }
+.today-warning { margin-top: 3px; overflow: hidden; color: var(--danger); font-size: 9px; font-weight: 650; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
+.today-hero .macros { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px 18px; margin-top: 10px; padding: 0; border: 0; }
+.today-hero .macro { display: grid; grid-template-columns: 22px minmax(0, 1fr); align-items: center; gap: 6px; min-height: 28px; padding: 0; border: 0; }
+.today-hero .macro:nth-child(n+3) { padding: 0; border: 0; }
+.macro-key { color: var(--protein); font-size: 10px; font-weight: 800; }
+.macro.carbs .macro-key { color: var(--carbs); }.macro.fat .macro-key { color: var(--fat); }.macro.fiber .macro-key { color: oklch(0.48 0.10 140); }
+.macro-values { display: flex; align-items: baseline; justify-content: space-between; gap: 4px; color: var(--muted); font-size: 9px; font-variant-numeric: tabular-nums; }
+.macro-values strong { color: var(--text); font-size: 11px; font-weight: 700; }
+.today-hero .macroline { height: 4px; margin-top: 3px; }
+.today-meals { display: grid; overflow: hidden; border: 1px solid var(--line); border-radius: 15px; background: var(--panel); box-shadow: var(--shadow-sm); }
+.meal-row { appearance: none; display: grid; grid-template-columns: 36px minmax(0, 1fr) auto 20px; align-items: center; gap: 10px; min-height: 56px; padding: 0 12px; border: 0; background: transparent; color: var(--text); text-align: left; }
+.meal-row + .meal-row { border-top: 1px solid var(--line-soft); }
+.meal-row:hover { background: var(--panel-muted); }
+.meal-row .meal-period-icon { width: 34px; height: 34px; border-radius: 10px; }
+.meal-row .mealname { font: 600 15px/1.1 Georgia, "Times New Roman", serif; }
+.meal-row .mealsum { margin: 0; color: var(--text-soft); font-size: 11px; font-variant-numeric: tabular-nums; }
+.meal-row > .icon:last-child { width: 16px; height: 16px; color: var(--muted); }
+.today-add { width: min(100%, 360px); min-height: 52px; margin-inline: auto; border-radius: 14px; font-size: 15px; }
+.meal-view { display: grid; grid-template-rows: auto minmax(0, 1fr) 52px; gap: 10px; min-height: 100%; }
+.meal-view-head { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; align-items: center; gap: 9px; min-height: 52px; }
+.meal-view-head h1 { margin: 0; font: 600 24px/1 Georgia, "Times New Roman", serif; text-transform: capitalize; }
+.meal-view-head > span { color: var(--text-soft); font-size: 12px; font-weight: 650; }
+.meal-view-list { min-height: 0; }
+.meal-view-list .empty { border: 0; }
+.meal-view-add { width: min(100%, 360px); min-height: 52px; margin-inline: auto; text-transform: capitalize; }
+
+@media (max-width: 700px) {
+  .today-screen { grid-template-rows: 44px minmax(176px, 1fr) 224px 52px; }
+  .today-date .today-btn { min-width: 58px; min-height: 44px; }
+}

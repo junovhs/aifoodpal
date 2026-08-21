@@ -6,8 +6,12 @@ import { CaptureError } from "../src/capture-client";
 import { createEntry, createState, normalizeFood, type AppState } from "../src/model";
 import type { StateRepository } from "../src/storage";
 
+const openSettings = (root: HTMLElement): void => {
+  root.querySelector<HTMLElement>('[data-action="view"][data-view="settings"]')!.click();
+};
+
 describe("protected snack budget", () => {
-  it("renders meaningful meal sections and flags main-meal encroachment", () => {
+  it("flags main-meal encroachment while keeping the control in Settings", () => {
     const state = createState("2026-08-20");
     Object.assign(state.profile, { onboardingComplete: true, manualDailyGuide: 2000 });
     Object.assign(state.prefs, { protectedSnackBudgetEnabled: true, protectedSnackCalories: 400 });
@@ -20,20 +24,20 @@ describe("protected snack budget", () => {
 
     new DaybookApp(root, repository).start();
 
-    expect([...root.querySelectorAll(".scale-labels .scale-segment strong")].map((node) => node.textContent)).toEqual(["breakfast", "lunch", "dinner", "snacks"]);
-    expect(root.querySelector(".scale-labels .snacks")?.textContent).toContain("400 kcal");
-    expect(root.querySelector<HTMLElement>(".scale-overrun")?.style.cssText).toContain("left: 80%");
-    expect(root.querySelector(".summary-note")?.textContent).toContain("100 protected snack kcal used by main meals");
-    expect(root.querySelector(".summary-note")?.textContent).toContain("200 kcal remaining today");
+    expect(root.querySelector(".today-warning")?.textContent).toContain("100 protected snack kcal used by main meals");
+    expect(root.querySelector(".today-remaining")?.textContent).toContain("200");
+    expect(root.querySelector('form[data-form="snack-budget"]')).toBeNull();
+    openSettings(root);
     expect(root.querySelector<HTMLInputElement>('form[data-form="snack-budget"] input[name="enabled"]')?.checked).toBe(true);
   });
 
-  it("saves the opt-in preference from the Snacks section", () => {
+  it("saves the opt-in preference from Settings", () => {
     const state = createState("2026-08-20");
     Object.assign(state.profile, { onboardingComplete: true, manualDailyGuide: 2000 });
     const save = vi.fn<(state: AppState) => void>();
     const root = document.createElement("main");
     new DaybookApp(root, { load: () => state, save }).start();
+    openSettings(root);
     const form = root.querySelector<HTMLFormElement>('form[data-form="snack-budget"]')!;
     form.querySelector<HTMLInputElement>('input[name="enabled"]')!.checked = true;
     form.querySelector<HTMLInputElement>('input[name="calories"]')!.value = "350";
@@ -52,8 +56,8 @@ describe("protected snack budget", () => {
     const root = document.createElement("main");
     new DaybookApp(root, { load: () => state, save: vi.fn() }).start();
 
-    expect(root.querySelector(".scale-overrun")).toBeNull();
-    expect(root.querySelector(".summary-note")?.textContent).toContain("300 kcal remaining today");
+    expect(root.querySelector(".today-warning")).toBeNull();
+    expect(root.querySelector(".today-remaining")?.textContent).toContain("300");
   });
 
   it("rejects a snack reserve that would consume the whole daily guide", () => {
@@ -62,6 +66,7 @@ describe("protected snack budget", () => {
     const save = vi.fn<(state: AppState) => void>();
     const root = document.createElement("main");
     new DaybookApp(root, { load: () => state, save }).start();
+    openSettings(root);
     const form = root.querySelector<HTMLFormElement>('form[data-form="snack-budget"]')!;
     form.querySelector<HTMLInputElement>('input[name="enabled"]')!.checked = true;
     form.querySelector<HTMLInputElement>('input[name="calories"]')!.value = "2000";
@@ -79,9 +84,47 @@ describe("protected snack budget", () => {
     const root = document.createElement("main");
 
     new DaybookApp(root, { load: () => state, save: vi.fn() }).start();
+    openSettings(root);
 
     expect(state.prefs.protectedSnackCalories).toBe(299);
     expect(root.querySelector<HTMLInputElement>('input[name="calories"]')?.value).toBe("299");
+  });
+});
+
+describe("Today phone layout", () => {
+  it("renders one compact dashboard with four meal links and no diary rows", () => {
+    const state = createState("2026-08-21");
+    Object.assign(state.profile, { onboardingComplete: true, manualDailyGuide: 2000 });
+    const food = normalizeFood({
+      name: "Everyday meal",
+      nutrition: { calories: 180, proteinG: 12, carbsG: 20, fatG: 6, fiberG: 3 },
+    });
+    for (const period of ["breakfast", "lunch", "dinner", "snacks"] as const) {
+      state.entries.push(createEntry(food, state.prefs.date, period));
+    }
+    const root = document.createElement("main");
+
+    new DaybookApp(root, { load: () => state, save: vi.fn() }).start();
+
+    expect(root.querySelector(".view")?.classList.contains("today-view")).toBe(true);
+    expect(root.querySelector(".today-remaining strong")?.textContent).toBe("1,280");
+    expect(root.querySelector(".today-progress-label")?.textContent).toContain("720 of 2,000 kcal");
+    expect(root.querySelectorAll(".today-hero .macro")).toHaveLength(4);
+    const rows = [...root.querySelectorAll<HTMLElement>(".meal-row")];
+    expect(rows.map((row) => row.dataset.period)).toEqual(["breakfast", "lunch", "dinner", "snacks"]);
+    expect(rows.every((row) => row.dataset.action === "open-meal")).toBe(true);
+    expect(rows.every((row) => row.textContent?.includes("180 kcal"))).toBe(true);
+    expect(root.querySelector(".today-screen .entry")).toBeNull();
+    expect(root.querySelector('.today-screen form[data-form="snack-budget"]')).toBeNull();
+    expect(root.querySelector('.today-add[data-action="choose-food"]')?.textContent).toContain("Add food");
+
+    rows[1]!.click();
+    expect(root.querySelector(".meal-view h1")?.textContent).toBe("lunch");
+    expect(root.querySelectorAll(".meal-view .entry")).toHaveLength(1);
+    expect(root.querySelector(".meal-view")?.textContent).toContain("Everyday meal");
+    expect(root.querySelector(".meal-view-add")?.textContent).toContain("Add to lunch");
+    root.querySelector<HTMLElement>('[data-action="back-today"]')!.click();
+    expect(root.querySelector(".today-screen")).not.toBeNull();
   });
 });
 
