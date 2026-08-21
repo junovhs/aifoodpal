@@ -37,6 +37,7 @@ export interface CaptureResult {
   remaining: { today: number; month: number };
 }
 
+/** Sends one prepared photo for interpretation; injected into the food editor so tests can fake it. */
 export type CaptureFoodClient = (request: CaptureRequest) => Promise<CaptureResult>;
 
 /**
