@@ -91,7 +91,7 @@ export class DaybookApp {
 
   private render(): void {
     const brand = `<div class="wordmark"><span class="brandmark">${icon("NotebookTabs")}</span><span><b>AI</b>foodpal</span></div>`;
-    this.root.innerHTML = `<div class="shell"><aside class="side">${brand}${this.nav()}<div class="sidebottom">${icon("ShieldCheck")}<span>Private by default.<br>Stored in this browser.</span></div></aside><main class="main"><header class="top">${brand}<div class="top-actions"><button class="btn btn-icon" data-action="open-ai">${icon("Sparkles")}<span>AI bridge</span></button>${this.syncStatus ? `<div class="sync-host" data-sync-header>${this.syncHeaderHtml()}</div>` : ""}${this.account ? `<div class="account-host" data-account-header>${this.account.headerHtml()}</div>` : ""}</div></header><div class="view">${this.content()}</div></main></div>${this.nav(true)}${this.modalHtml()}${this.syncStatus ? `<div data-sync-modal>${this.syncModalHtml()}</div>` : ""}${this.account ? `<div data-account-modal>${this.account.modalHtml()}</div>` : ""}<div class="toast" id="toast"></div>`;
+    this.root.innerHTML = `<div class="shell"><aside class="side">${brand}${this.nav()}<div class="sidebottom">${icon("ShieldCheck")}<span>Private by default.<br>Stored in this browser.</span></div></aside><main class="main"><header class="top">${brand}<div class="top-actions">${this.account ? `<div class="account-host" data-account-header>${this.account.headerHtml()}</div>` : ""}</div></header><div class="view" data-scroll-pane>${this.content()}</div>${this.nav(true)}</main></div>${this.modalHtml()}${this.syncStatus ? `<div data-sync-modal>${this.syncModalHtml()}</div>` : ""}${this.account ? `<div data-account-modal>${this.account.modalHtml()}</div>` : ""}<div class="toast" id="toast"></div>`;
     renderIcons(this.root);
   }
 
@@ -120,16 +120,16 @@ export class DaybookApp {
 
   private renderSync(): void {
     if (!this.syncStatus) return;
-    const header = this.root.querySelector<HTMLElement>("[data-sync-header]");
+    const settings = this.root.querySelector<HTMLElement>("[data-sync-settings]");
     const modal = this.root.querySelector<HTMLElement>("[data-sync-modal]");
-    this.mount(header, this.syncHeaderHtml());
+    this.mount(settings, this.syncSettingsHtml());
     this.mount(modal, this.syncModalHtml());
   }
 
-  private syncHeaderHtml(): string {
+  private syncSettingsHtml(): string {
     const status = this.syncStatus!;
     const labels: Record<SyncStatus["phase"], string> = { local: "On this device", connecting: "Syncing…", migration: "Finish setup", synced: "Synced", offline: "Offline", conflict: "Sync conflict" };
-    return `<button class="btn btn-icon sync-trigger ${status.phase}" data-sync-action="open" aria-label="Open sync details: ${html(status.message)}">${icon(status.phase === "synced" ? "Check" : "DatabaseBackup")}<span>${labels[status.phase]}</span></button>`;
+    return `<button class="setting sync-setting ${status.phase}" data-sync-action="open" aria-label="Open sync details: ${html(status.message)}"><span>Cloud sync</span><span class="tiny">${icon(status.phase === "synced" ? "Check" : "DatabaseBackup")}${labels[status.phase]}</span></button>`;
   }
 
   private syncModalHtml(): string {
@@ -248,7 +248,8 @@ export class DaybookApp {
   private settings(): string {
     const profile = this.state.profile;
     const guidance = calorieGuidance(profile);
-    return `<div class="head"><div><span class="eyebrow">Preferences</span><h1 class="title">Settings</h1><p class="subtitle">Plan, portability, and privacy.</p></div></div><form data-form="settings" class="card pad stack"><div class="two">${field("daily calorie guide", "manualDailyGuide", profile.manualDailyGuide ?? "", "number", "min=500 placeholder=automatic")}${field("activity multiplier", "activityPAL", profile.activityPAL, "number", "min=1.2 max=2.4 step=.1")}${field(`goal weight (${this.weightUnit()})`, "goalWeight", this.displayWeight(profile.goalWeightLb) ?? "", "number", "step=.1")}${field("weekly pace (lb)", "rateLbWeek", profile.rateLbWeek, "number", "min=0 step=.25")}</div><label class="field"><span>goal</span><select name="goalType"><option value="lose" ${profile.goalType === "lose" ? "selected" : ""}>lose</option><option value="maintain" ${profile.goalType === "maintain" ? "selected" : ""}>maintain</option><option value="gain" ${profile.goalType === "gain" ? "selected" : ""}>gain</option></select></label><div class="notice">${guidance.ok ? `Automatic estimate: ${fmt(guidance.target)} kcal/day${guidance.weeks ? ` · roughly ${fmt(guidance.weeks)} weeks` : ""}.` : html(guidance.reason)}</div><button class="btn-primary" type="submit">save plan</button></form><section class="section"><p class="label">data</p><div class="card settings"><button class="setting" data-action="open-ai"><span>AI bridge</span><span class="tiny">copy / paste</span></button><button class="setting" data-action="open-backup"><span>backup & restore</span><span class="tiny">portable JSON</span></button><button class="setting" data-action="onboard"><span>edit baseline</span><span class="tiny">profile setup</span></button></div></section>`;
+    const sync = this.syncStatus ? `<span class="sync-settings-host" data-sync-settings>${this.syncSettingsHtml()}</span>` : "";
+    return `<div class="head"><div><span class="eyebrow">Preferences</span><h1 class="title">Settings</h1><p class="subtitle">Plan, portability, and privacy.</p></div></div><form data-form="settings" class="card pad stack"><div class="two">${field("daily calorie guide", "manualDailyGuide", profile.manualDailyGuide ?? "", "number", "min=500 placeholder=automatic")}${field("activity multiplier", "activityPAL", profile.activityPAL, "number", "min=1.2 max=2.4 step=.1")}${field(`goal weight (${this.weightUnit()})`, "goalWeight", this.displayWeight(profile.goalWeightLb) ?? "", "number", "step=.1")}${field("weekly pace (lb)", "rateLbWeek", profile.rateLbWeek, "number", "min=0 step=.25")}</div><label class="field"><span>goal</span><select name="goalType"><option value="lose" ${profile.goalType === "lose" ? "selected" : ""}>lose</option><option value="maintain" ${profile.goalType === "maintain" ? "selected" : ""}>maintain</option><option value="gain" ${profile.goalType === "gain" ? "selected" : ""}>gain</option></select></label><div class="notice">${guidance.ok ? `Automatic estimate: ${fmt(guidance.target)} kcal/day${guidance.weeks ? ` · roughly ${fmt(guidance.weeks)} weeks` : ""}.` : html(guidance.reason)}</div><button class="btn-primary" type="submit">save plan</button></form><section class="section"><p class="label">services & data</p><div class="card settings"><button class="setting" data-action="open-ai"><span>AI bridge</span><span class="tiny">copy / paste</span></button>${sync}<button class="setting" data-action="open-backup"><span>backup & restore</span><span class="tiny">portable JSON</span></button><button class="setting" data-action="onboard"><span>edit baseline</span><span class="tiny">profile setup</span></button></div></section>`;
   }
 
   private onboarding(): string {
