@@ -2,6 +2,8 @@
 
 This guide enables email/password accounts, recovery, and cloud daybook sync. The app remains fully usable in local browser mode when Supabase is not configured.
 
+The AI photo-capture path — the `ai-food` Edge Function, its spend caps, and the OpenRouter account behind it — builds on this and is documented separately in [the AI capture guide](ai-capture.md).
+
 ## 1. Create and configure the project
 
 Create a Supabase project, then copy its project URL and **publishable** key from the project Connect dialog or Settings > API Keys. A publishable key is safe for browser use because authorization is enforced by Row Level Security.

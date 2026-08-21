@@ -12,6 +12,8 @@ npm run dev
 
 Without the two Supabase environment variables the app intentionally stays in browser-only mode. For accounts and cloud sync, follow [the Supabase setup and verification guide](docs/supabase-setup.md).
 
+Photograph a package or a plate and the app fills the food in for you. How that path works, what it costs, and how to operate it is in [the AI capture guide](docs/ai-capture.md).
+
 ## Quality gates
 
 ```sh
