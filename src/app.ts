@@ -11,7 +11,7 @@ import type { AccountController } from "./account";
 import { CloudStateRepository, type SyncStatus } from "./cloud-sync";
 
 type View = "day" | "calendar" | "library" | "trend" | "settings";
-type FoodModal = { kind: "food"; food?: Food; draft?: FoodInput; aiMessage?: string; aiError?: string };
+type FoodModal = { kind: "food"; food?: Food; draft?: FoodInput; aiPrompt?: string; aiMessage?: string; aiError?: string };
 type Modal = FoodModal | { kind: "combo"; error?: string } | { kind: "quick"; calories: number; period: Period } | { kind: "choose"; period?: Period } | { kind: "log"; food: Food; period?: Period } | { kind: "delete-food"; food: Food } | { kind: "weight" } | { kind: "backup" } | { kind: "ai"; stage: "request" | "prompt" | "reply" | "preview"; prompt?: string; response?: AiResponse } | null;
 
 const html = (value: unknown): string => String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;");
@@ -257,7 +257,7 @@ export class DaybookApp {
     const n = food?.nutrition;
     const recipe = food?.recipe;
     const ingredients = recipe?.ingredients ?? [];
-    return `<form data-form="food" data-id="${modal.food?.id ?? ""}"><div class="mhead"><div>${modal.food ? "edit food" : "new food"}</div>${this.close()}</div><section class="ai-assist"><div class="ai-assist-head"><span class="ai-assist-icon">${icon("Sparkles")}</span><div><strong>AI Assist</strong><div>Use ChatGPT to estimate or extract this food.</div></div></div><div class="ai-actions"><button class="btn btn-icon" type="button" data-action="ask-food-ai">${icon("Copy")}<span>Ask AI</span></button><button class="btn btn-icon" type="button" data-action="apply-food-clipboard">${icon("ClipboardPaste")}<span>Apply Clipboard</span></button></div>${modal.aiMessage ? `<div class="notice success">${icon("Check")}${html(modal.aiMessage)}</div>` : ""}${modal.aiError ? `<div class="notice warn">${html(modal.aiError)}</div>` : ""}<details class="ai-fallback"><summary>Paste AI response manually</summary><textarea class="code" id="ai-food-manual" placeholder='{"schemaVersion":1,...}'></textarea><button class="tiny-btn" type="button" data-action="apply-food-manual">Apply</button></details></section><div class="two">${field("food name", "name", food?.name ?? "", "text", "required placeholder='Cream cheese'")}${field("brand", "brand", food?.brand ?? "", "text")}${field("serving amount", "servingAmount", food?.serving?.amount ?? 1, "number", "min=.0001 step=any required")}${field("serving unit", "servingUnit", food?.serving?.unit ?? "serving", "text", "list=measurement-units required placeholder='tbsp, cup, g…'")}${field("calories", "calories", n?.calories ?? 0, "number", "min=0 required")}${field("protein (g)", "proteinG", n?.proteinG ?? "", "number", "min=0 step=.1")}${field("carbs (g)", "carbsG", n?.carbsG ?? "", "number", "min=0 step=.1")}${field("fat (g)", "fatG", n?.fatG ?? "", "number", "min=0 step=.1")}${field("fiber (g)", "fiberG", n?.fiberG ?? "", "number", "min=0 step=.1")}${field("total sugar (g)", "sugarG", n?.sugarG ?? "", "number", "min=0 step=.1")}${field("added sugar (g)", "addedSugarG", n?.addedSugarG ?? "", "number", "min=0 step=.1")}${field("saturated fat (g)", "saturatedFatG", n?.saturatedFatG ?? "", "number", "min=0 step=.1")}${field("sodium (mg)", "sodiumMg", n?.sodiumMg ?? "", "number", "min=0 step=1")}</div><div class="measurement-note">Keep quantity out of the food name. The serving above can be changed whenever you log it.</div><label class="recipe-toggle"><input type="checkbox" name="isRecipe" ${recipe ? "checked" : ""}><span>${icon("ChefHat")}<b>Is this a recipe?</b><small>Add ingredients, their optional macros, and instructions.</small></span></label>${recipe ? `<section class="recipe-editor"><div class="between"><div><strong>Ingredients</strong><div class="tiny">Amounts and component macros are optional.</div></div><button class="tiny-btn btn-icon" type="button" data-action="add-ingredient">${icon("ListPlus")}<span>Add ingredient</span></button></div><div class="ingredient-list">${ingredients.map((ingredient, index) => this.ingredientFields(ingredient, index)).join("")}</div><label class="field"><span>recipe instructions (optional)</span><textarea name="instructions" placeholder="Mix, cook, portion…">${html(recipe.instructions ?? "")}</textarea></label></section>` : ""}${measurementList()}<div class="mfooter"><button class="btn-primary">save food</button></div></form>`;
+    return `<form data-form="food" data-id="${modal.food?.id ?? ""}"><div class="mhead"><div>${modal.food ? "edit food" : "new food"}</div>${this.close()}</div><section class="ai-assist"><div class="ai-assist-head"><span class="ai-assist-icon">${icon("Sparkles")}</span><div><strong>AI Assist</strong><div>Copy only this food's details, then paste the reply below.</div></div></div><div class="ai-actions"><button class="btn btn-icon" type="button" data-action="ask-food-ai">${icon("Copy")}<span>Copy for AI</span></button><button class="btn btn-icon" type="button" data-action="apply-food-clipboard">${icon("ClipboardPaste")}<span>Paste from clipboard</span></button></div>${modal.aiMessage ? `<div class="notice success">${icon("Check")}${html(modal.aiMessage)}</div>` : ""}${modal.aiError ? `<div class="notice warn">${html(modal.aiError)}</div>` : ""}${modal.aiPrompt ? `<label class="field ai-copy-fallback"><span>Copy this prompt manually</span><textarea class="code" readonly>${html(modal.aiPrompt)}</textarea></label>` : ""}<label class="field ai-paste"><span>Paste AI reply</span><textarea class="code" id="ai-food-manual" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" placeholder='Paste the full reply here'></textarea></label><div class="ai-paste-help">Extra text and JSON code fences are okay.</div><button class="btn-primary ai-apply" type="button" data-action="apply-food-manual">Use pasted reply</button></section><div class="two">${field("food name", "name", food?.name ?? "", "text", "required placeholder='Cream cheese'")}${field("brand", "brand", food?.brand ?? "", "text")}${field("serving amount", "servingAmount", food?.serving?.amount ?? 1, "number", "min=.0001 step=any required")}${field("serving unit", "servingUnit", food?.serving?.unit ?? "serving", "text", "list=measurement-units required placeholder='tbsp, cup, g…'")}${field("calories", "calories", n?.calories ?? 0, "number", "min=0 required")}${field("protein (g)", "proteinG", n?.proteinG ?? "", "number", "min=0 step=.1")}${field("carbs (g)", "carbsG", n?.carbsG ?? "", "number", "min=0 step=.1")}${field("fat (g)", "fatG", n?.fatG ?? "", "number", "min=0 step=.1")}${field("fiber (g)", "fiberG", n?.fiberG ?? "", "number", "min=0 step=.1")}${field("total sugar (g)", "sugarG", n?.sugarG ?? "", "number", "min=0 step=.1")}${field("added sugar (g)", "addedSugarG", n?.addedSugarG ?? "", "number", "min=0 step=.1")}${field("saturated fat (g)", "saturatedFatG", n?.saturatedFatG ?? "", "number", "min=0 step=.1")}${field("sodium (mg)", "sodiumMg", n?.sodiumMg ?? "", "number", "min=0 step=1")}</div><div class="measurement-note">Keep quantity out of the food name. The serving above can be changed whenever you log it.</div><label class="recipe-toggle"><input type="checkbox" name="isRecipe" ${recipe ? "checked" : ""}><span>${icon("ChefHat")}<b>Is this a recipe?</b><small>Add ingredients, their optional macros, and instructions.</small></span></label>${recipe ? `<section class="recipe-editor"><div class="between"><div><strong>Ingredients</strong><div class="tiny">Amounts and component macros are optional.</div></div><button class="tiny-btn btn-icon" type="button" data-action="add-ingredient">${icon("ListPlus")}<span>Add ingredient</span></button></div><div class="ingredient-list">${ingredients.map((ingredient, index) => this.ingredientFields(ingredient, index)).join("")}</div><label class="field"><span>recipe instructions (optional)</span><textarea name="instructions" placeholder="Mix, cook, portion…">${html(recipe.instructions ?? "")}</textarea></label></section>` : ""}${measurementList()}<div class="mfooter"><button class="btn-primary">save food</button></div></form>`;
   }
 
   private ingredientFields(ingredient: Partial<Omit<RecipeIngredient, "nutrition">> & { nutrition?: Partial<RecipeIngredient["nutrition"]> }, index: number): string {
@@ -507,11 +507,12 @@ export class DaybookApp {
     if (this.modal?.kind !== "food") return;
     const current = this.modal;
     const draft = this.captureFoodDraft();
+    const prompt = buildFoodAiPrompt(draft);
     try {
-      await this.writeClipboard(buildFoodAiPrompt(this.state, draft));
-      this.modal = { ...current, draft, aiMessage: "AI prompt copied — paste it into ChatGPT.", aiError: undefined };
+      await this.writeClipboard(prompt);
+      this.modal = { ...current, draft, aiPrompt: undefined, aiMessage: "Prompt copied — paste it into your AI app.", aiError: undefined };
     } catch {
-      this.modal = { ...current, draft, aiMessage: undefined, aiError: "Could not copy automatically. Your browser may block clipboard access." };
+      this.modal = { ...current, draft, aiPrompt: prompt, aiMessage: undefined, aiError: "Automatic copy was blocked. Press and hold the prompt below to copy it." };
     }
     this.render();
   }
@@ -524,7 +525,7 @@ export class DaybookApp {
       const raw = await navigator.clipboard.readText();
       this.applyFoodImport(raw, draft);
     } catch {
-      this.modal = { ...current, draft, aiMessage: undefined, aiError: "Clipboard access was denied. Expand ‘Paste AI response manually’ below." };
+      this.modal = { ...current, draft, aiMessage: undefined, aiError: "Automatic paste was blocked. Press and hold in the Paste AI reply box below, then choose Paste." };
       this.render();
     }
   }
@@ -542,7 +543,9 @@ export class DaybookApp {
   }
 
   private async writeClipboard(value: string): Promise<void> {
-    if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(value);
+    if (navigator.clipboard?.writeText) {
+      try { await navigator.clipboard.writeText(value); return; } catch { /* Fall back for browsers with partial clipboard support. */ }
+    }
     const area = document.createElement("textarea");
     area.value = value;
     area.style.position = "fixed";

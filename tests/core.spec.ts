@@ -191,13 +191,17 @@ describe("AI bridge", () => {
   });
 
   it("builds a food-only prompt with partial recipe context", () => {
-    const prompt = buildFoodAiPrompt(readyState(), { name: "Taco bowls", recipe: { ingredients: [{ name: "rice" }] } });
+    const state = readyState();
+    state.foods.push(normalizeFood({ name: "Private saved breakfast", nutrition: { calories: 400 } }));
+    const prompt = buildFoodAiPrompt({ name: "Taco bowls", recipe: { ingredients: [{ name: "rice" }] } });
     expect(prompt).toContain("PARTIAL FOOD");
     expect(prompt).toContain("Taco bowls");
     expect(prompt).toContain("one food");
     expect(prompt).toContain("ONE serving");
     expect(prompt).toContain("best-effort estimate");
     expect(prompt).toContain("do not leave core macros blank");
+    expect(prompt).not.toContain("CURRENT APP CONTEXT");
+    expect(prompt).not.toContain("Private saved breakfast");
   });
 
   it("fills a draft from upsertFood while preserving omitted user values", () => {
@@ -216,6 +220,12 @@ describe("AI bridge", () => {
     expect(() => importFoodDraft({}, "not json")).toThrow(/not valid JSON/i);
     expect(() => importFoodDraft({}, '{"schemaVersion":2,"operations":[]}')).toThrow(/not supported/i);
     expect(() => importFoodDraft({}, '{"schemaVersion":1,"operations":[]}')).toThrow(/upsertFood/i);
+  });
+
+  it("accepts JSON copied with code fences or explanatory text", () => {
+    const reply = '{"schemaVersion":1,"summary":"Done","operations":[{"type":"upsertFood","food":{"name":"Toast","nutrition":{"calories":120}}}]}';
+    expect(parseAiResponse(`\uFEFF\n\`\`\`json\n${reply}\n\`\`\``).summary).toBe("Done");
+    expect(parseAiResponse(`Here is the result:\n${reply}\nYou can paste it into the app.`).operations).toHaveLength(1);
   });
 
   it("validates and applies food, entry, weight, and goal operations", () => {

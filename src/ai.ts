@@ -13,13 +13,45 @@ export interface AiResponse { schemaVersion: 1; summary?: string; operations: Ai
 const isOperation = (value: unknown): value is AiOperation =>
   Boolean(value && typeof value === "object" && ["upsertFood", "addEntry", "addWeight", "updateProfile", "setGoal"].includes(String((value as { type?: unknown }).type)));
 
-export const parseAiResponse = (json: string): AiResponse => {
-  let value: Partial<AiResponse>;
-  try {
-    value = JSON.parse(json) as Partial<AiResponse>;
-  } catch {
-    throw new Error("That text is not valid JSON. Copy the complete AI response and try again.");
+const jsonCandidates = (input: string): unknown[] => {
+  const text = input.replace(/^\uFEFF/, "").trim();
+  const candidates: unknown[] = [];
+  try { candidates.push(JSON.parse(text)); } catch { /* Try extracting JSON from an AI wrapper below. */ }
+
+  for (let start = 0; start < text.length; start += 1) {
+    if (text[start] !== "{" && text[start] !== "[") continue;
+    const stack: string[] = [];
+    let quoted = false;
+    let escaped = false;
+    for (let end = start; end < text.length; end += 1) {
+      const char = text[end]!;
+      if (quoted) {
+        if (escaped) escaped = false;
+        else if (char === "\\") escaped = true;
+        else if (char === '"') quoted = false;
+        continue;
+      }
+      if (char === '"') { quoted = true; continue; }
+      if (char === "{" || char === "[") stack.push(char);
+      else if (char === "}" || char === "]") {
+        const expected = char === "}" ? "{" : "[";
+        if (stack.pop() !== expected) break;
+        if (stack.length === 0) {
+          try { candidates.push(JSON.parse(text.slice(start, end + 1))); } catch { /* Keep looking. */ }
+          break;
+        }
+      }
+    }
   }
+  return candidates;
+};
+
+export const parseAiResponse = (json: string): AiResponse => {
+  const candidates = jsonCandidates(json);
+  const objects = candidates.filter((candidate): candidate is Partial<AiResponse> => Boolean(candidate && typeof candidate === "object"));
+  const value = objects.find((candidate) => "schemaVersion" in candidate && "operations" in candidate)
+    ?? objects.find((candidate) => "schemaVersion" in candidate || "operations" in candidate);
+  if (!value) throw new Error("That text is not valid JSON for an AI response. Paste the complete reply; extra text and code fences are okay.");
   if (value.schemaVersion !== 1) {
     throw new Error(value.schemaVersion == null ? "The AI response is missing schemaVersion 1." : `Schema version ${value.schemaVersion} is not supported.`);
   }
@@ -29,7 +61,7 @@ export const parseAiResponse = (json: string): AiResponse => {
   return value as AiResponse;
 };
 
-export const buildFoodAiPrompt = (state: AppState, draft: FoodInput): string => `You are a structured data assistant for AIfoodpal, a private food tracker. Return ONLY valid JSON with no markdown or code fences.
+export const buildFoodAiPrompt = (draft: FoodInput): string => `You are a structured data assistant for AIfoodpal, a private food tracker. Return ONLY valid JSON with no markdown or code fences.
 
 Create or complete the food below as one upsertFood operation.
 
@@ -51,9 +83,6 @@ Required output:
 
 Recipe shape when applicable:
 {"ingredients":[{"name":"ingredient","amount":1,"unit":"cup","nutrition":{"calories":null,"proteinG":null,"carbsG":null,"fatG":null}}],"instructions":"optional directions"}
-
-CURRENT APP CONTEXT:
-${JSON.stringify({ selectedDate: state.prefs.date, units: state.profile.units, existingFoods: state.foods.map(({ id, name, brand }) => ({ id, name, brand })) }, null, 2)}
 
 PARTIAL FOOD:
 ${JSON.stringify(draft, null, 2)}`;

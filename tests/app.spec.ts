@@ -83,3 +83,24 @@ describe("protected snack budget", () => {
     expect(root.querySelector<HTMLInputElement>('input[name="calories"]')?.value).toBe("299");
   });
 });
+
+describe("food AI clipboard flow", () => {
+  it("keeps a visible native-paste path and reveals the prompt when automatic copy is blocked", async () => {
+    const state = createState("2026-08-20");
+    Object.assign(state.profile, { onboardingComplete: true, manualDailyGuide: 2000 });
+    state.foods.push(normalizeFood({ name: "Private saved breakfast", nutrition: { calories: 400 } }));
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: vi.fn().mockRejectedValue(new Error("blocked")) } });
+    const root = document.createElement("main");
+    new DaybookApp(root, { load: () => state, save: vi.fn() }).start();
+
+    root.querySelector<HTMLElement>('[data-action="choose-food"]')!.click();
+    root.querySelector<HTMLElement>('[data-action="new-food"]')!.click();
+    expect(root.querySelector(".ai-paste")?.textContent).toContain("Paste AI reply");
+    expect(root.querySelector("details.ai-fallback")).toBeNull();
+    root.querySelector<HTMLElement>('[data-action="ask-food-ai"]')!.click();
+
+    await vi.waitFor(() => expect(root.querySelector<HTMLTextAreaElement>(".ai-copy-fallback textarea")?.value).toContain("PARTIAL FOOD"));
+    expect(root.querySelector<HTMLTextAreaElement>(".ai-copy-fallback textarea")?.value).not.toContain("Private saved breakfast");
+    expect(root.querySelector(".ai-assist")?.textContent).toContain("Press and hold");
+  });
+});
