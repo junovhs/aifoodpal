@@ -9,3 +9,9 @@ extra_search_path = ["public", "extensions"]
 enabled = true
 site_url = "http://127.0.0.1:5173"
 additional_redirect_urls = ["http://localhost:5173", "http://127.0.0.1:5173"]
+
+# AI capture. verify_jwt keeps the function unreachable without a session, so
+# consume_ai_credit always has a caller to charge.
+[functions.ai-food]
+enabled = true
+verify_jwt = true
