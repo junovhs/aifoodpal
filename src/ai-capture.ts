@@ -6,6 +6,7 @@ import type { Confidence, FoodInput, SourceType } from "./model";
  */
 export type CaptureMode = "label" | "estimate";
 
+/** Every mode, for validating an incoming request and for iterating the capture buttons. */
 export const CAPTURE_MODES: readonly CaptureMode[] = ["label", "estimate"];
 
 /**
@@ -93,6 +94,7 @@ export const CAPTURE_RESPONSE_SCHEMA = {
   propertyOrdering: ["name", "brand", "serving", "nutrition", "sourceType", "confidence", "notes", "recipe"],
 } as const;
 
+/** Whether the reply could not be parsed at all, or parsed but did not match the declared schema. */
 export type CaptureContractErrorCode = "invalid-json" | "invalid-shape";
 
 /** A reply that did not conform to CAPTURE_RESPONSE_SCHEMA, kept distinct from a transport failure. */
