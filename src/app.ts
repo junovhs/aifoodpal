@@ -1,4 +1,7 @@
-import { applyAiResponse, buildAiPrompt, buildFoodAiPrompt, importFoodDraft, parseAiResponse, type AiResponse } from "./ai";
+import { applyAiResponse, buildAiPrompt, parseAiResponse, type AiResponse } from "./ai";
+import { NOTE_MAX_CHARS, captureToFoodDraft, type CaptureMode } from "./ai-capture";
+import { prepareImage, type CapturedImage } from "./image";
+import { CaptureError, captureFoodViaSupabase, type CaptureFoodClient } from "./capture-client";
 import { createEntry, createQuickCalorieEntry, isoDate, moveDiaryEntry, normalizeFood, normalizePeriod, PERIODS, protectedSnackBudget, removeFoodFromLibrary, uid, type AppState, type Food, type FoodInput, type Period, type RecipeIngredient } from "./model";
 import { calorieGuidance, dailyCalorieGuide, formatDate, kgToPounds, latestWeight, nutritionTargets, poundsToKg, round, shiftDate, totalsFor } from "./nutrition";
 import { exportBackup, parseBackup, type StateRepository } from "./storage";
@@ -11,7 +14,13 @@ import type { AccountController } from "./account";
 import { CloudStateRepository, type SyncStatus } from "./cloud-sync";
 
 type View = "day" | "calendar" | "library" | "trend" | "settings";
-type FoodModal = { kind: "food"; food?: Food; draft?: FoodInput; aiPrompt?: string; aiMessage?: string; aiError?: string };
+type FoodModal = { kind: "food"; food?: Food; draft?: FoodInput; aiPrompt?: string; aiMessage?: string; aiError?: string; captureNote?: string; capturing?: CaptureMode };
+
+/** The impure half of photo capture, injected so the food editor is testable without a canvas or a server. */
+export interface FoodCaptureDeps {
+  prepare: (file: Blob) => Promise<CapturedImage>;
+  send: CaptureFoodClient;
+}
 type Modal = FoodModal | { kind: "combo"; error?: string } | { kind: "quick"; calories: number; period: Period } | { kind: "choose"; period?: Period } | { kind: "log"; food: Food; period?: Period } | { kind: "delete-food"; food: Food } | { kind: "weight" } | { kind: "backup" } | { kind: "ai"; stage: "request" | "prompt" | "reply" | "preview"; prompt?: string; response?: AiResponse } | null;
 
 const html = (value: unknown): string => String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;");
@@ -30,7 +39,12 @@ export class DaybookApp {
   private syncOpen = false;
   private readonly mounted = new WeakMap<HTMLElement, string>();
 
-  constructor(private readonly root: HTMLElement, private readonly repository: StateRepository, private readonly account?: AccountController) {
+  constructor(
+    private readonly root: HTMLElement,
+    private readonly repository: StateRepository,
+    private readonly account?: AccountController,
+    private readonly capture: FoodCaptureDeps = { prepare: prepareImage, send: captureFoodViaSupabase },
+  ) {
     this.state = repository.load();
     this.normalizeSnackBudget();
     this.calendarMonth = this.state.prefs.date.slice(0, 7);
@@ -257,7 +271,8 @@ export class DaybookApp {
     const n = food?.nutrition;
     const recipe = food?.recipe;
     const ingredients = recipe?.ingredients ?? [];
-    return `<form data-form="food" data-id="${modal.food?.id ?? ""}"><div class="mhead"><div>${modal.food ? "edit food" : "new food"}</div>${this.close()}</div><section class="ai-assist"><div class="ai-assist-head"><span class="ai-assist-icon">${icon("Sparkles")}</span><div><strong>AI Assist</strong><div>Copy only this food's details, then paste the reply below.</div></div></div><div class="ai-actions"><button class="btn btn-icon" type="button" data-action="ask-food-ai">${icon("Copy")}<span>Copy for AI</span></button><button class="btn btn-icon" type="button" data-action="apply-food-clipboard">${icon("ClipboardPaste")}<span>Paste from clipboard</span></button></div>${modal.aiMessage ? `<div class="notice success">${icon("Check")}${html(modal.aiMessage)}</div>` : ""}${modal.aiError ? `<div class="notice warn">${html(modal.aiError)}</div>` : ""}${modal.aiPrompt ? `<label class="field ai-copy-fallback"><span>Copy this prompt manually</span><textarea class="code" readonly>${html(modal.aiPrompt)}</textarea></label>` : ""}<label class="field ai-paste"><span>Paste AI reply</span><textarea class="code" id="ai-food-manual" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" placeholder='Paste the full reply here'></textarea></label><div class="ai-paste-help">Extra text and JSON code fences are okay.</div><button class="btn-primary ai-apply" type="button" data-action="apply-food-manual">Use pasted reply</button></section><div class="two">${field("food name", "name", food?.name ?? "", "text", "required placeholder='Cream cheese'")}${field("brand", "brand", food?.brand ?? "", "text")}${field("serving amount", "servingAmount", food?.serving?.amount ?? 1, "number", "min=.0001 step=any required")}${field("serving unit", "servingUnit", food?.serving?.unit ?? "serving", "text", "list=measurement-units required placeholder='tbsp, cup, g…'")}${field("calories", "calories", n?.calories ?? 0, "number", "min=0 required")}${field("protein (g)", "proteinG", n?.proteinG ?? "", "number", "min=0 step=.1")}${field("carbs (g)", "carbsG", n?.carbsG ?? "", "number", "min=0 step=.1")}${field("fat (g)", "fatG", n?.fatG ?? "", "number", "min=0 step=.1")}${field("fiber (g)", "fiberG", n?.fiberG ?? "", "number", "min=0 step=.1")}${field("total sugar (g)", "sugarG", n?.sugarG ?? "", "number", "min=0 step=.1")}${field("added sugar (g)", "addedSugarG", n?.addedSugarG ?? "", "number", "min=0 step=.1")}${field("saturated fat (g)", "saturatedFatG", n?.saturatedFatG ?? "", "number", "min=0 step=.1")}${field("sodium (mg)", "sodiumMg", n?.sodiumMg ?? "", "number", "min=0 step=1")}</div><div class="measurement-note">Keep quantity out of the food name. The serving above can be changed whenever you log it.</div><label class="recipe-toggle"><input type="checkbox" name="isRecipe" ${recipe ? "checked" : ""}><span>${icon("ChefHat")}<b>Is this a recipe?</b><small>Add ingredients, their optional macros, and instructions.</small></span></label>${recipe ? `<section class="recipe-editor"><div class="between"><div><strong>Ingredients</strong><div class="tiny">Amounts and component macros are optional.</div></div><button class="tiny-btn btn-icon" type="button" data-action="add-ingredient">${icon("ListPlus")}<span>Add ingredient</span></button></div><div class="ingredient-list">${ingredients.map((ingredient, index) => this.ingredientFields(ingredient, index)).join("")}</div><label class="field"><span>recipe instructions (optional)</span><textarea name="instructions" placeholder="Mix, cook, portion…">${html(recipe.instructions ?? "")}</textarea></label></section>` : ""}${measurementList()}<div class="mfooter"><button class="btn-primary">save food</button></div></form>`;
+    const busy = Boolean(modal.capturing);
+    return `<form data-form="food" data-id="${modal.food?.id ?? ""}"><div class="mhead"><div>${modal.food ? "edit food" : "new food"}</div>${this.close()}</div><section class="ai-assist"><div class="ai-assist-head"><span class="ai-assist-icon">${icon("Sparkles")}</span><div><strong>Add it from a photo</strong><div>Point the camera at a label, or at the food itself.</div></div></div><div class="ai-actions"><button class="btn btn-icon" type="button" data-action="capture" data-mode="label" ${busy ? "disabled" : ""}>${icon("ScanText")}<span>Scan a label</span></button><button class="btn btn-icon" type="button" data-action="capture" data-mode="estimate" ${busy ? "disabled" : ""}>${icon("Camera")}<span>Estimate this plate</span></button></div><label class="field ai-note"><span>anything worth knowing? (optional)</span><textarea id="ai-food-note" name="captureNote" rows="2" maxlength="${NOTE_MAX_CHARS}" placeholder="I made this — it's lamb, not beef, and it was on the fatty side">${html(modal.captureNote ?? "")}</textarea></label><div class="ai-paste-help">The note is sent with the photo. It beats the picture when they disagree.</div><input type="file" accept="image/*" capture="environment" data-capture-input="label" hidden><input type="file" accept="image/*" data-capture-input="estimate" hidden>${busy ? `<div class="notice">${icon("Sparkles")}Reading your ${modal.capturing === "label" ? "label" : "photo"}…</div>` : ""}${modal.aiMessage ? `<div class="notice success">${icon("Check")}${html(modal.aiMessage)}</div>` : ""}${modal.aiError ? `<div class="notice warn">${html(modal.aiError)}</div>` : ""}</section><div class="two">${field("food name", "name", food?.name ?? "", "text", "required placeholder='Cream cheese'")}${field("brand", "brand", food?.brand ?? "", "text")}${field("serving amount", "servingAmount", food?.serving?.amount ?? 1, "number", "min=.0001 step=any required")}${field("serving unit", "servingUnit", food?.serving?.unit ?? "serving", "text", "list=measurement-units required placeholder='tbsp, cup, g…'")}${field("calories", "calories", n?.calories ?? 0, "number", "min=0 required")}${field("protein (g)", "proteinG", n?.proteinG ?? "", "number", "min=0 step=.1")}${field("carbs (g)", "carbsG", n?.carbsG ?? "", "number", "min=0 step=.1")}${field("fat (g)", "fatG", n?.fatG ?? "", "number", "min=0 step=.1")}${field("fiber (g)", "fiberG", n?.fiberG ?? "", "number", "min=0 step=.1")}${field("total sugar (g)", "sugarG", n?.sugarG ?? "", "number", "min=0 step=.1")}${field("added sugar (g)", "addedSugarG", n?.addedSugarG ?? "", "number", "min=0 step=.1")}${field("saturated fat (g)", "saturatedFatG", n?.saturatedFatG ?? "", "number", "min=0 step=.1")}${field("sodium (mg)", "sodiumMg", n?.sodiumMg ?? "", "number", "min=0 step=1")}</div><div class="measurement-note">Keep quantity out of the food name. The serving above can be changed whenever you log it.</div><label class="recipe-toggle"><input type="checkbox" name="isRecipe" ${recipe ? "checked" : ""}><span>${icon("ChefHat")}<b>Is this a recipe?</b><small>Add ingredients, their optional macros, and instructions.</small></span></label>${recipe ? `<section class="recipe-editor"><div class="between"><div><strong>Ingredients</strong><div class="tiny">Amounts and component macros are optional.</div></div><button class="tiny-btn btn-icon" type="button" data-action="add-ingredient">${icon("ListPlus")}<span>Add ingredient</span></button></div><div class="ingredient-list">${ingredients.map((ingredient, index) => this.ingredientFields(ingredient, index)).join("")}</div><label class="field"><span>recipe instructions (optional)</span><textarea name="instructions" placeholder="Mix, cook, portion…">${html(recipe.instructions ?? "")}</textarea></label></section>` : ""}${measurementList()}<div class="mfooter"><button class="btn-primary">save food</button></div></form>`;
   }
 
   private ingredientFields(ingredient: Partial<Omit<RecipeIngredient, "nutrition">> & { nutrition?: Partial<RecipeIngredient["nutrition"]> }, index: number): string {
@@ -333,34 +348,41 @@ export class DaybookApp {
     if (action === "copy-prompt" && this.modal?.kind === "ai") void this.copy(this.modal.prompt ?? "", "packet copied");
     if (action === "ai-reply") { this.modal = { kind: "ai", stage: "reply" }; this.render(); }
     if (action === "apply-ai" && this.modal?.kind === "ai" && this.modal.response) { const result = applyAiResponse(this.state, this.modal.response); this.state = result.state; this.modal = null; this.save(`${result.applied} changes applied`); }
-    if (action === "ask-food-ai") void this.askFoodAi();
-    if (action === "apply-food-clipboard") void this.applyFoodClipboard();
-    if (action === "apply-food-manual") {
-      const raw = this.root.querySelector<HTMLTextAreaElement>("#ai-food-manual")?.value ?? "";
-      this.applyFoodImport(raw);
+    if (action === "capture" && this.modal?.kind === "food" && !this.modal.capturing) {
+      // Remember the note and the typed-in fields before the picker steals focus: opening it
+      // can rerender or background the page, and an unsaved form would be lost.
+      this.modal = { ...this.modal, draft: this.captureFoodDraft(), captureNote: this.currentNote(), aiMessage: undefined, aiError: undefined };
+      this.root.querySelector<HTMLInputElement>(`[data-capture-input="${button.dataset.mode}"]`)?.click();
     }
     if (action === "add-ingredient" && this.modal?.kind === "food") {
       const draft = this.captureFoodDraft();
       draft.recipe ??= { ingredients: [], instructions: null };
       draft.recipe.ingredients ??= [];
       draft.recipe.ingredients.push({ name: "", amount: null, unit: "", nutrition: {} });
-      this.modal = { ...this.modal, draft, aiMessage: undefined, aiError: undefined };
+      this.modal = { ...this.modal, draft, captureNote: this.currentNote(), aiMessage: undefined, aiError: undefined };
       this.render();
     }
     if (action === "remove-ingredient" && this.modal?.kind === "food") {
       const draft = this.captureFoodDraft();
       draft.recipe?.ingredients?.splice(Number(button.dataset.index), 1);
-      this.modal = { ...this.modal, draft, aiMessage: undefined, aiError: undefined };
+      this.modal = { ...this.modal, draft, captureNote: this.currentNote(), aiMessage: undefined, aiError: undefined };
       this.render();
     }
   }
 
   private onChange(event: Event): void {
     const target = event.target as HTMLInputElement;
+    const captureMode = target.dataset.captureInput;
+    if (captureMode) {
+      const file = target.files?.[0];
+      target.value = "";
+      if (file) void this.runCapture(captureMode as CaptureMode, file);
+      return;
+    }
     if (target.name !== "isRecipe" || this.modal?.kind !== "food") return;
     const draft = this.captureFoodDraft();
     draft.recipe = target.checked ? (draft.recipe ?? { ingredients: [{ name: "", amount: null, unit: "", nutrition: {} }], instructions: null }) : null;
-    this.modal = { ...this.modal, draft, aiMessage: undefined, aiError: undefined };
+    this.modal = { ...this.modal, draft, captureNote: this.currentNote(), aiMessage: undefined, aiError: undefined };
     this.render();
   }
 
@@ -503,43 +525,55 @@ export class DaybookApp {
     };
   }
 
-  private async askFoodAi(): Promise<void> {
+  private currentNote(): string {
+    return this.root.querySelector<HTMLTextAreaElement>("#ai-food-note")?.value.trim() ?? "";
+  }
+
+  /**
+   * Downscale the photo, send it with the note, and merge the reply into the open form.
+   * Nothing is saved: the user reviews the filled fields and presses save themselves, so a
+   * wrong estimate is a correction rather than a bad entry in the library.
+   */
+  private async runCapture(mode: CaptureMode, file: Blob): Promise<void> {
     if (this.modal?.kind !== "food") return;
-    const current = this.modal;
-    const draft = this.captureFoodDraft();
-    const prompt = buildFoodAiPrompt(draft);
-    try {
-      await this.writeClipboard(prompt);
-      this.modal = { ...current, draft, aiPrompt: undefined, aiMessage: "Prompt copied — paste it into your AI app.", aiError: undefined };
-    } catch {
-      this.modal = { ...current, draft, aiPrompt: prompt, aiMessage: undefined, aiError: "Automatic copy was blocked. Press and hold the prompt below to copy it." };
-    }
+    const draft = this.modal.draft ?? this.captureFoodDraft();
+    const note = this.modal.captureNote ?? this.currentNote();
+    this.modal = { ...this.modal, draft, captureNote: note, capturing: mode, aiMessage: undefined, aiError: undefined };
     this.render();
-  }
 
-  private async applyFoodClipboard(): Promise<void> {
-    if (this.modal?.kind !== "food") return;
-    const current = this.modal;
-    const draft = this.captureFoodDraft();
     try {
-      const raw = await navigator.clipboard.readText();
-      this.applyFoodImport(raw, draft);
-    } catch {
-      this.modal = { ...current, draft, aiMessage: undefined, aiError: "Automatic paste was blocked. Press and hold in the Paste AI reply box below, then choose Paste." };
-      this.render();
-    }
-  }
-
-  private applyFoodImport(raw: string, current = this.captureFoodDraft()): void {
-    if (this.modal?.kind !== "food") return;
-    const modal = this.modal;
-    try {
-      const draft = importFoodDraft(current, raw);
-      this.modal = { ...modal, draft, aiMessage: "AI response applied to the form. Review it, then save when ready.", aiError: undefined };
+      const image = await this.prepareCapture(file);
+      const result = await this.capture.send({ mode, imageBase64: image.base64, mimeType: image.mimeType, note: note || null });
+      if (this.modal?.kind !== "food") return;
+      this.modal = {
+        ...this.modal,
+        draft: captureToFoodDraft(draft, result.food),
+        capturing: undefined,
+        captureNote: note,
+        aiMessage: `Filled in from your photo. Check it, then save. ${result.remaining.today} captures left today.`,
+        aiError: undefined,
+      };
     } catch (error) {
-      this.modal = { ...modal, draft: current, aiMessage: undefined, aiError: error instanceof Error ? error.message : "Could not apply that AI response." };
+      if (this.modal?.kind !== "food") return;
+      this.modal = { ...this.modal, draft, capturing: undefined, captureNote: note, aiMessage: undefined, aiError: this.captureMessage(error) };
     }
     this.render();
+  }
+
+  private async prepareCapture(file: Blob): Promise<CapturedImage> {
+    try {
+      return await this.capture.prepare(file);
+    } catch (error) {
+      throw new CaptureError("bad-request", error instanceof Error ? error.message : "That photo could not be read.");
+    }
+  }
+
+  private captureMessage(error: unknown): string {
+    if (error instanceof CaptureError && error.code === "limit-reached") {
+      return `${error.message} You can still fill the food in by hand.`;
+    }
+    if (error instanceof Error && error.message) return error.message;
+    return "Photo capture failed. Try again.";
   }
 
   private async writeClipboard(value: string): Promise<void> {
