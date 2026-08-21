@@ -9,8 +9,10 @@ export const MAX_EDGE_PX = 768;
 /** High enough that label text stays crisp, low enough that cellular uploads stay quick. */
 export const JPEG_QUALITY = 0.8;
 
+/** Why a capture was refused: wrong file kind, unreadable photo, or a canvas that would not encode. */
 export type ImageCaptureErrorCode = "unsupported-type" | "decode-failed" | "encode-failed";
 
+/** Typed capture failure, so the food editor can show a specific message instead of a generic one. */
 export class ImageCaptureError extends Error {
   readonly code: ImageCaptureErrorCode;
 
@@ -21,6 +23,7 @@ export class ImageCaptureError extends Error {
   }
 }
 
+/** A downscaled JPEG ready to send as a Gemini inlineData part. */
 export interface CapturedImage {
   /** Raw base64, with no data: URL prefix, ready for a Gemini inlineData part. */
   base64: string;
@@ -30,6 +33,7 @@ export interface CapturedImage {
   bytes: number;
 }
 
+/** The subset of ImageBitmap the resize pipeline needs, so tests can supply a plain object. */
 export interface DecodedImage {
   width: number;
   height: number;
@@ -42,6 +46,7 @@ export interface ImageCodec {
   encode: (image: DecodedImage, width: number, height: number, quality: number) => Promise<Blob>;
 }
 
+/** Post-fit pixel dimensions; the aspect ratio always matches the source. */
 export interface PreparedImageSize {
   width: number;
   height: number;
@@ -93,6 +98,7 @@ export const browserImageCodec: ImageCodec = {
   },
 };
 
+/** Overrides for prepareImage; every field defaults to the browser codec and the tile-aware constants. */
 export interface PrepareImageOptions {
   codec?: ImageCodec;
   maxEdge?: number;
