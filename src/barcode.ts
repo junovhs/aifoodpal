@@ -6,6 +6,7 @@ import type { FoodInput } from "./model";
  */
 export type BarcodeMissReason = "no-barcode" | "unknown-product" | "unreadable-product" | "lookup-failed";
 
+/** Either a food the free path filled in, or a reason to fall through to the AI read. */
 export type BarcodeResult =
   | { found: true; food: FoodInput; code: string }
   | { found: false; reason: BarcodeMissReason };
