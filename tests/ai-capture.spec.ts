@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  CAPTURE_RESPONSE_FORMAT,
   CAPTURE_RESPONSE_SCHEMA,
   CORE_MACROS,
   MODEL_FOR_MODE,
@@ -10,6 +11,14 @@ import {
   validateCapturePayload,
 } from "../src/ai-capture";
 import type { FoodInput } from "../src/model";
+
+interface SchemaNode {
+  type?: string | string[];
+  additionalProperties?: boolean;
+  required?: readonly string[];
+  properties?: Record<string, unknown>;
+  items?: unknown;
+}
 
 const labelPayload = {
   name: "Greek yogurt",
@@ -23,16 +32,52 @@ const labelPayload = {
 };
 
 describe("capture response schema", () => {
-  it("declares every core macro required and never opens the object", () => {
-    const schema = JSON.parse(JSON.stringify(CAPTURE_RESPONSE_SCHEMA)) as Record<string, unknown>;
-    const nutrition = (schema.properties as Record<string, { required: string[] } | undefined>).nutrition!;
+  /** Walk every object node, the way a strict-mode validator does. */
+  const objectNodes = (node: unknown, path = "root"): Array<[string, SchemaNode]> => {
+    if (!node || typeof node !== "object") return [];
+    const schema = node as SchemaNode;
+    const types = Array.isArray(schema.type) ? schema.type : [schema.type];
+    const here: Array<[string, SchemaNode]> = types.includes("object") ? [[path, schema]] : [];
+    const children = Object.entries(schema.properties ?? {}).flatMap(([key, value]) => objectNodes(value, `${path}.${key}`));
+    return [...here, ...children, ...objectNodes(schema.items, `${path}[]`)];
+  };
 
-    expect(nutrition.required).toEqual([...CORE_MACROS]);
-    expect(schema.required).toEqual(["name", "serving", "nutrition", "sourceType", "confidence"]);
-    expect(JSON.stringify(schema)).not.toContain("additionalProperties");
+  it("closes every object and requires every property, as strict mode demands", () => {
+    const schema = JSON.parse(JSON.stringify(CAPTURE_RESPONSE_SCHEMA)) as SchemaNode;
+    const nodes = objectNodes(schema);
+
+    expect(nodes.map(([path]) => path)).toEqual([
+      "root", "root.serving", "root.nutrition", "root.recipe", "root.recipe.ingredients[]",
+    ]);
+    for (const [path, node] of nodes) {
+      expect(node.additionalProperties, `${path} must be closed`).toBe(false);
+      expect([...(node.required ?? [])].sort(), `${path} must require every property`).toEqual(Object.keys(node.properties ?? {}).sort());
+    }
+  });
+
+  it("spells optional values as type unions, not as a Gemini nullable flag", () => {
+    const schema = JSON.parse(JSON.stringify(CAPTURE_RESPONSE_SCHEMA)) as SchemaNode;
+    const nutrition = schema.properties!.nutrition as SchemaNode;
+
+    expect(nutrition.required).toEqual([...CORE_MACROS, "sugarG", "addedSugarG", "saturatedFatG", "transFatG", "sodiumMg"]);
+    expect((nutrition.properties!.calories as SchemaNode).type).toBe("number");
+    expect((nutrition.properties!.fiberG as SchemaNode).type).toEqual(["number", "null"]);
+    expect((schema.properties!.recipe as SchemaNode).type).toEqual(["object", "null"]);
+
+    const serialized = JSON.stringify(schema);
+    expect(serialized).not.toContain("nullable");
+    expect(serialized).not.toContain("propertyOrdering");
+  });
+
+  it("wraps the schema the way OpenRouter expects, with strict binding", () => {
+    expect(CAPTURE_RESPONSE_FORMAT.type).toBe("json_schema");
+    expect(CAPTURE_RESPONSE_FORMAT.json_schema.strict).toBe(true);
+    expect(CAPTURE_RESPONSE_FORMAT.json_schema.schema).toBe(CAPTURE_RESPONSE_SCHEMA);
   });
 
   it("routes transcription to the cheap model and judgement to the stronger one", () => {
+    expect(MODEL_FOR_MODE.label).toBe("google/gemini-2.5-flash-lite");
+    expect(MODEL_FOR_MODE.estimate).toBe("google/gemini-2.5-flash");
     expect(MODEL_FOR_MODE.label).toContain("flash-lite");
     expect(MODEL_FOR_MODE.estimate).not.toContain("lite");
   });

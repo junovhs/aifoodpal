@@ -2,15 +2,16 @@
 // network, or a database lives in ./handler.ts and is covered by tests/ai-food-function.spec.ts;
 // this file is only the transport: read the request, build the real dependencies, serve.
 //
-// Deployment note for OPS-01: handler.ts imports the shared contract from ../../../src, whose
+// Deployment note for OPS-01: this file and handler.ts import the shared contract from ../../../src, whose
 // modules use extensionless specifiers. deno.json in this directory enables sloppy-imports so
 // Deno resolves them. If `supabase functions deploy ai-food` rejects that, the contained fix is
 // to add explicit .ts extensions to the imports in handler.ts and src/ai-capture.ts.
 
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { handleAiFood, type AiCreditGrant, type GenerateRequest } from "./handler.ts";
+import { CAPTURE_RESPONSE_FORMAT } from "../../../src/ai-capture.ts";
 
-const GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models";
+const OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
 
 const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -21,41 +22,64 @@ const corsHeaders: Record<string, string> = {
 const json = (status: number, body: unknown): Response =>
   new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
 
-/** Ask Gemini for one food, constrained to the shared response schema. */
+/**
+ * Ask OpenRouter for one food, constrained to the shared response schema.
+ *
+ * OpenRouter is a passthrough at the provider's own rates, so this costs the same per call as
+ * talking to Google directly; it exists so the key is an OpenRouter key with its own hard
+ * per-key spend limit rather than a Google Cloud billing account.
+ */
 const generate = async (apiKey: string, request: GenerateRequest): Promise<string> => {
-  const response = await fetch(`${GEMINI_ENDPOINT}/${request.model}:generateContent`, {
+  const response = await fetch(OPENROUTER_ENDPOINT, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+      // Attribution headers; OpenRouter shows these on the activity page per app.
+      "HTTP-Referer": "https://aifoodpal.app",
+      "X-Title": "AIfoodpal",
+    },
     body: JSON.stringify({
-      contents: [{
+      model: request.model,
+      messages: [{
         role: "user",
-        parts: [
-          { text: request.prompt },
-          { inline_data: { mime_type: request.mimeType, data: request.imageBase64 } },
+        content: [
+          { type: "text", text: request.prompt },
+          { type: "image_url", image_url: { url: `data:${request.mimeType};base64,${request.imageBase64}` } },
         ],
       }],
-      generationConfig: {
-        responseMimeType: "application/json",
-        responseSchema: request.schema,
-        temperature: 0,
-      },
+      response_format: CAPTURE_RESPONSE_FORMAT,
+      temperature: 0,
+      usage: { include: true },
     }),
   });
 
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
-    throw new Error(`Gemini returned ${response.status}. ${detail.slice(0, 300)}`.trim());
+    throw new Error(`OpenRouter returned ${response.status}. ${detail.slice(0, 300)}`.trim());
   }
 
   const payload = await response.json() as {
-    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> }; finishReason?: string }>;
+    choices?: Array<{ message?: { content?: string }; finish_reason?: string }>;
+    usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: number };
+    error?: { message?: string };
   };
-  const candidate = payload.candidates?.[0];
-  const text = candidate?.content?.parts?.map((part) => part.text ?? "").join("") ?? "";
+
+  if (payload.error?.message) throw new Error(`OpenRouter: ${payload.error.message}`);
+
+  // Real token counts, so the caps and model choices can be tuned against observed cost
+  // instead of estimates. Visible in `supabase functions logs ai-food`.
+  const usage = payload.usage;
+  if (usage) {
+    console.log(`ai-food usage model=${request.model} in=${usage.prompt_tokens ?? "?"} out=${usage.completion_tokens ?? "?"} cost=${usage.cost ?? "?"}`);
+  }
+
+  const choice = payload.choices?.[0];
+  const text = choice?.message?.content ?? "";
   if (text.trim().length === 0) {
     // A blocked or truncated generation returns no usable text; say which, so the browser
     // can tell "try a clearer photo" apart from "the service is down".
-    throw new Error(`Gemini returned no usable content${candidate?.finishReason ? ` (${candidate.finishReason})` : ""}.`);
+    throw new Error(`OpenRouter returned no usable content${choice?.finish_reason ? ` (${choice.finish_reason})` : ""}.`);
   }
   return text;
 };
@@ -82,7 +106,7 @@ Deno.serve(async (request: Request): Promise<Response> => {
     return json(400, { ok: false, code: "bad-request", error: "Send a JSON body." });
   }
 
-  const apiKey = Deno.env.get("GEMINI_API_KEY") ?? null;
+  const apiKey = Deno.env.get("OPENROUTER_API_KEY") ?? null;
 
   try {
     const result = await handleAiFood(payload, {

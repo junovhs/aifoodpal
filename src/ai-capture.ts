@@ -10,12 +10,14 @@ export type CaptureMode = "label" | "estimate";
 export const CAPTURE_MODES: readonly CaptureMode[] = ["label", "estimate"];
 
 /**
- * Transcription is nearly mechanical, so it runs on the cheap model; estimating a portion
- * is real judgement and gets the stronger one. Tuned against observed output in OPS-01.
+ * OpenRouter model slugs. Transcription is nearly mechanical, so it runs on the cheap model;
+ * estimating a portion is real judgement and gets the stronger one. OpenRouter resells these
+ * at the provider's own rates, so routing through it costs nothing extra per call — it only
+ * removes the need for a Google Cloud billing account. Tuned against observed output in OPS-01.
  */
 export const MODEL_FOR_MODE: Record<CaptureMode, string> = {
-  label: "gemini-2.5-flash-lite",
-  estimate: "gemini-2.5-flash",
+  label: "google/gemini-2.5-flash-lite",
+  estimate: "google/gemini-2.5-flash",
 };
 
 /** Long enough for real context ("it's lamb, not beef, and it was fatty"), short enough to bound cost. */
@@ -29,72 +31,81 @@ export const CORE_MACROS = ["calories", "proteinG", "carbsG", "fatG", "fiberG"] 
 
 const OPTIONAL_NUTRIENTS = ["sugarG", "addedSugarG", "saturatedFatG", "transFatG", "sodiumMg"] as const;
 
-const nullableNumber = { type: "number", nullable: true } as const;
+/** Strict JSON Schema spells an optional value as a type union rather than a `nullable` flag. */
+const nullableNumber = { type: ["number", "null"] } as const;
+const nullableString = { type: ["string", "null"] } as const;
+
+const NUTRIENT_KEYS = [...CORE_MACROS, ...OPTIONAL_NUTRIENTS] as const;
+
+const nutritionProperties = Object.fromEntries(
+  NUTRIENT_KEYS.map((key) => [key, key === "calories" ? { type: "number" } : nullableNumber]),
+);
 
 /**
- * Gemini `responseSchema` (the OpenAPI 3.0 subset it accepts: no `additionalProperties`,
- * nullability via `nullable`). Constraining generation to this is what removes the whole
- * class of parse failures the clipboard bridge had — no fences, no prose, no smart quotes.
+ * The response schema, in the strict JSON Schema dialect OpenRouter forwards to the provider.
+ *
+ * Strict mode has three hard requirements that shape this: every object closes with
+ * `additionalProperties: false`, every property is listed in `required`, and optionality is
+ * expressed as a `["type", "null"]` union rather than by omission. So "the panel does not
+ * state fiber" arrives as an explicit null, which is exactly what the merge in
+ * `captureToFoodDraft` already treats as "leave what the user typed alone".
  */
 export const CAPTURE_RESPONSE_SCHEMA = {
   type: "object",
+  additionalProperties: false,
+  required: ["name", "brand", "serving", "nutrition", "sourceType", "confidence", "notes", "recipe"],
   properties: {
     name: { type: "string", description: "The food's identity only. Never include a quantity." },
-    brand: { type: "string", nullable: true },
+    brand: nullableString,
     serving: {
       type: "object",
+      additionalProperties: false,
+      required: ["amount", "unit", "description"],
       properties: {
         amount: { type: "number" },
         unit: { type: "string", description: "tsp, tbsp, fl oz, cup, ml, l, g, kg, oz, lb, serving, piece, slice, or container." },
         description: { type: "string" },
       },
-      required: ["amount", "unit", "description"],
     },
     nutrition: {
       type: "object",
-      properties: {
-        calories: { type: "number" },
-        proteinG: nullableNumber,
-        carbsG: nullableNumber,
-        fatG: nullableNumber,
-        fiberG: nullableNumber,
-        sugarG: nullableNumber,
-        addedSugarG: nullableNumber,
-        saturatedFatG: nullableNumber,
-        transFatG: nullableNumber,
-        sodiumMg: nullableNumber,
-      },
-      required: [...CORE_MACROS],
+      additionalProperties: false,
+      required: [...NUTRIENT_KEYS],
+      properties: nutritionProperties,
     },
     sourceType: { type: "string", enum: [...SOURCE_TYPES] },
     confidence: { type: "string", enum: [...CONFIDENCE_LEVELS] },
-    notes: { type: "string", nullable: true, description: "How the figures were arrived at, when that is worth knowing." },
+    notes: { ...nullableString, description: "How the figures were arrived at, when that is worth knowing." },
     recipe: {
-      type: "object",
-      nullable: true,
+      type: ["object", "null"],
+      additionalProperties: false,
+      required: ["ingredients", "instructions"],
       properties: {
         ingredients: {
           type: "array",
           items: {
             type: "object",
+            additionalProperties: false,
+            required: ["name", "amount", "unit"],
             properties: {
               name: { type: "string" },
               amount: nullableNumber,
               unit: { type: "string" },
             },
-            required: ["name"],
           },
         },
-        instructions: { type: "string", nullable: true },
+        instructions: nullableString,
       },
-      required: ["ingredients"],
     },
   },
-  required: ["name", "serving", "nutrition", "sourceType", "confidence"],
-  propertyOrdering: ["name", "brand", "serving", "nutrition", "sourceType", "confidence", "notes", "recipe"],
 } as const;
 
-/** Whether the reply could not be parsed at all, or parsed but did not match the declared schema. */
+/** OpenRouter wants the schema wrapped and named; `strict` is what makes conformance binding. */
+export const CAPTURE_RESPONSE_FORMAT = {
+  type: "json_schema",
+  json_schema: { name: "aifoodpal_food", strict: true, schema: CAPTURE_RESPONSE_SCHEMA },
+} as const;
+
 export type CaptureContractErrorCode = "invalid-json" | "invalid-shape";
 
 /** A reply that did not conform to CAPTURE_RESPONSE_SCHEMA, kept distinct from a transport failure. */
@@ -130,7 +141,7 @@ const readNullableString = (value: unknown, field: string): string | null => {
 };
 
 /**
- * Validate a decoded Gemini reply against the same contract the request declared.
+ * Validate a decoded model reply against the same contract the request declared.
  * Structured output makes conformance overwhelmingly likely, not guaranteed — a truncated
  * or safety-filtered generation still has to be refused rather than half-applied.
  */
