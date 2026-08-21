@@ -19,6 +19,7 @@ export const MAX_IMAGE_BYTES = 1_500_000;
 
 const ALLOWED_MIME_TYPES = ["image/jpeg", "image/png", "image/webp"];
 
+/** Why a capture request failed, so the food editor can pick the right message and status. */
 export type AiFoodErrorCode =
   | "bad-request"
   | "limit-reached"
@@ -40,18 +41,21 @@ export interface AiFoodRequest {
   note?: string | null;
 }
 
+/** A validated food draft plus the caller's remaining allowance. */
 export interface AiFoodSuccessBody {
   ok: true;
   food: FoodInput;
   remaining: { today: number; month: number };
 }
 
+/** A refusal the browser can act on; `error` is safe to show the user verbatim. */
 export interface AiFoodErrorBody {
   ok: false;
   code: AiFoodErrorCode;
   error: string;
 }
 
+/** HTTP status and body the Deno entry point serializes. */
 export interface AiFoodResponse {
   status: number;
   body: AiFoodSuccessBody | AiFoodErrorBody;
