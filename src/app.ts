@@ -2,6 +2,7 @@ import { applyAiResponse, buildAiPrompt, parseAiResponse, type AiResponse } from
 import { NOTE_MAX_CHARS, captureToFoodDraft, type CaptureMode } from "./ai-capture";
 import { prepareImage, type CapturedImage } from "./image";
 import { CaptureError, captureFoodViaSupabase, type CaptureFoodClient } from "./capture-client";
+import { decodeBarcode, lookupOpenFoodFacts, scanBarcode, type BarcodeResult } from "./barcode";
 import { createEntry, createQuickCalorieEntry, isoDate, moveDiaryEntry, normalizeFood, normalizePeriod, PERIODS, protectedSnackBudget, removeFoodFromLibrary, uid, type AppState, type Food, type FoodInput, type Period, type RecipeIngredient } from "./model";
 import { calorieGuidance, dailyCalorieGuide, formatDate, kgToPounds, latestWeight, nutritionTargets, poundsToKg, round, shiftDate, totalsFor } from "./nutrition";
 import { exportBackup, parseBackup, type StateRepository } from "./storage";
@@ -20,6 +21,8 @@ type FoodModal = { kind: "food"; food?: Food; draft?: FoodInput; aiPrompt?: stri
 export interface FoodCaptureDeps {
   prepare: (file: Blob) => Promise<CapturedImage>;
   send: CaptureFoodClient;
+  /** The free path: decode a barcode and look the product up before any AI spend. */
+  scan: (image: Blob) => Promise<BarcodeResult>;
 }
 type Modal = FoodModal | { kind: "combo"; error?: string } | { kind: "quick"; calories: number; period: Period } | { kind: "choose"; period?: Period } | { kind: "log"; food: Food; period?: Period } | { kind: "delete-food"; food: Food } | { kind: "weight" } | { kind: "backup" } | { kind: "ai"; stage: "request" | "prompt" | "reply" | "preview"; prompt?: string; response?: AiResponse } | null;
 
@@ -43,7 +46,11 @@ export class DaybookApp {
     private readonly root: HTMLElement,
     private readonly repository: StateRepository,
     private readonly account?: AccountController,
-    private readonly capture: FoodCaptureDeps = { prepare: prepareImage, send: captureFoodViaSupabase },
+    private readonly capture: FoodCaptureDeps = {
+      prepare: prepareImage,
+      send: captureFoodViaSupabase,
+      scan: (image) => scanBarcode(image, { decode: decodeBarcode, lookup: lookupOpenFoodFacts }),
+    },
   ) {
     this.state = repository.load();
     this.normalizeSnackBudget();
@@ -272,7 +279,7 @@ export class DaybookApp {
     const recipe = food?.recipe;
     const ingredients = recipe?.ingredients ?? [];
     const busy = Boolean(modal.capturing);
-    return `<form data-form="food" data-id="${modal.food?.id ?? ""}"><div class="mhead"><div>${modal.food ? "edit food" : "new food"}</div>${this.close()}</div><section class="ai-assist"><div class="ai-assist-head"><span class="ai-assist-icon">${icon("Sparkles")}</span><div><strong>Add it from a photo</strong><div>Point the camera at a label, or at the food itself.</div></div></div><div class="ai-actions"><button class="btn btn-icon" type="button" data-action="capture" data-mode="label" ${busy ? "disabled" : ""}>${icon("ScanText")}<span>Scan a label</span></button><button class="btn btn-icon" type="button" data-action="capture" data-mode="estimate" ${busy ? "disabled" : ""}>${icon("Camera")}<span>Estimate this plate</span></button></div><label class="field ai-note"><span>anything worth knowing? (optional)</span><textarea id="ai-food-note" name="captureNote" rows="2" maxlength="${NOTE_MAX_CHARS}" placeholder="I made this — it's lamb, not beef, and it was on the fatty side">${html(modal.captureNote ?? "")}</textarea></label><div class="ai-paste-help">The note is sent with the photo. It beats the picture when they disagree.</div><input type="file" accept="image/*" capture="environment" data-capture-input="label" hidden><input type="file" accept="image/*" data-capture-input="estimate" hidden>${busy ? `<div class="notice">${icon("Sparkles")}Reading your ${modal.capturing === "label" ? "label" : "photo"}…</div>` : ""}${modal.aiMessage ? `<div class="notice success">${icon("Check")}${html(modal.aiMessage)}</div>` : ""}${modal.aiError ? `<div class="notice warn">${html(modal.aiError)}</div>` : ""}</section><div class="two">${field("food name", "name", food?.name ?? "", "text", "required placeholder='Cream cheese'")}${field("brand", "brand", food?.brand ?? "", "text")}${field("serving amount", "servingAmount", food?.serving?.amount ?? 1, "number", "min=.0001 step=any required")}${field("serving unit", "servingUnit", food?.serving?.unit ?? "serving", "text", "list=measurement-units required placeholder='tbsp, cup, g…'")}${field("calories", "calories", n?.calories ?? 0, "number", "min=0 required")}${field("protein (g)", "proteinG", n?.proteinG ?? "", "number", "min=0 step=.1")}${field("carbs (g)", "carbsG", n?.carbsG ?? "", "number", "min=0 step=.1")}${field("fat (g)", "fatG", n?.fatG ?? "", "number", "min=0 step=.1")}${field("fiber (g)", "fiberG", n?.fiberG ?? "", "number", "min=0 step=.1")}${field("total sugar (g)", "sugarG", n?.sugarG ?? "", "number", "min=0 step=.1")}${field("added sugar (g)", "addedSugarG", n?.addedSugarG ?? "", "number", "min=0 step=.1")}${field("saturated fat (g)", "saturatedFatG", n?.saturatedFatG ?? "", "number", "min=0 step=.1")}${field("sodium (mg)", "sodiumMg", n?.sodiumMg ?? "", "number", "min=0 step=1")}</div><div class="measurement-note">Keep quantity out of the food name. The serving above can be changed whenever you log it.</div><label class="recipe-toggle"><input type="checkbox" name="isRecipe" ${recipe ? "checked" : ""}><span>${icon("ChefHat")}<b>Is this a recipe?</b><small>Add ingredients, their optional macros, and instructions.</small></span></label>${recipe ? `<section class="recipe-editor"><div class="between"><div><strong>Ingredients</strong><div class="tiny">Amounts and component macros are optional.</div></div><button class="tiny-btn btn-icon" type="button" data-action="add-ingredient">${icon("ListPlus")}<span>Add ingredient</span></button></div><div class="ingredient-list">${ingredients.map((ingredient, index) => this.ingredientFields(ingredient, index)).join("")}</div><label class="field"><span>recipe instructions (optional)</span><textarea name="instructions" placeholder="Mix, cook, portion…">${html(recipe.instructions ?? "")}</textarea></label></section>` : ""}${measurementList()}<div class="mfooter"><button class="btn-primary">save food</button></div></form>`;
+    return `<form data-form="food" data-id="${modal.food?.id ?? ""}"><div class="mhead"><div>${modal.food ? "edit food" : "new food"}</div>${this.close()}</div><section class="ai-assist"><div class="ai-assist-head"><span class="ai-assist-icon">${icon("Sparkles")}</span><div><strong>Add it from a photo</strong><div>Point the camera at a barcode or label, or at the food itself.</div></div></div><div class="ai-actions"><button class="btn btn-icon" type="button" data-action="capture" data-mode="label" ${busy ? "disabled" : ""}>${icon("ScanText")}<span>Scan a package</span></button><button class="btn btn-icon" type="button" data-action="capture" data-mode="estimate" ${busy ? "disabled" : ""}>${icon("Camera")}<span>Estimate this plate</span></button></div><label class="field ai-note"><span>anything worth knowing? (optional)</span><textarea id="ai-food-note" name="captureNote" rows="2" maxlength="${NOTE_MAX_CHARS}" placeholder="I made this — it's lamb, not beef, and it was on the fatty side">${html(modal.captureNote ?? "")}</textarea></label><div class="ai-paste-help">The note is sent with the photo. It beats the picture when they disagree.</div><input type="file" accept="image/*" capture="environment" data-capture-input="label" hidden><input type="file" accept="image/*" data-capture-input="estimate" hidden>${busy ? `<div class="notice">${icon("Sparkles")}Reading your ${modal.capturing === "label" ? "label" : "photo"}…</div>` : ""}${modal.aiMessage ? `<div class="notice success">${icon("Check")}${html(modal.aiMessage)}</div>` : ""}${modal.aiError ? `<div class="notice warn">${html(modal.aiError)}</div>` : ""}</section><div class="two">${field("food name", "name", food?.name ?? "", "text", "required placeholder='Cream cheese'")}${field("brand", "brand", food?.brand ?? "", "text")}${field("serving amount", "servingAmount", food?.serving?.amount ?? 1, "number", "min=.0001 step=any required")}${field("serving unit", "servingUnit", food?.serving?.unit ?? "serving", "text", "list=measurement-units required placeholder='tbsp, cup, g…'")}${field("calories", "calories", n?.calories ?? 0, "number", "min=0 required")}${field("protein (g)", "proteinG", n?.proteinG ?? "", "number", "min=0 step=.1")}${field("carbs (g)", "carbsG", n?.carbsG ?? "", "number", "min=0 step=.1")}${field("fat (g)", "fatG", n?.fatG ?? "", "number", "min=0 step=.1")}${field("fiber (g)", "fiberG", n?.fiberG ?? "", "number", "min=0 step=.1")}${field("total sugar (g)", "sugarG", n?.sugarG ?? "", "number", "min=0 step=.1")}${field("added sugar (g)", "addedSugarG", n?.addedSugarG ?? "", "number", "min=0 step=.1")}${field("saturated fat (g)", "saturatedFatG", n?.saturatedFatG ?? "", "number", "min=0 step=.1")}${field("sodium (mg)", "sodiumMg", n?.sodiumMg ?? "", "number", "min=0 step=1")}</div><div class="measurement-note">Keep quantity out of the food name. The serving above can be changed whenever you log it.</div><label class="recipe-toggle"><input type="checkbox" name="isRecipe" ${recipe ? "checked" : ""}><span>${icon("ChefHat")}<b>Is this a recipe?</b><small>Add ingredients, their optional macros, and instructions.</small></span></label>${recipe ? `<section class="recipe-editor"><div class="between"><div><strong>Ingredients</strong><div class="tiny">Amounts and component macros are optional.</div></div><button class="tiny-btn btn-icon" type="button" data-action="add-ingredient">${icon("ListPlus")}<span>Add ingredient</span></button></div><div class="ingredient-list">${ingredients.map((ingredient, index) => this.ingredientFields(ingredient, index)).join("")}</div><label class="field"><span>recipe instructions (optional)</span><textarea name="instructions" placeholder="Mix, cook, portion…">${html(recipe.instructions ?? "")}</textarea></label></section>` : ""}${measurementList()}<div class="mfooter"><button class="btn-primary">save food</button></div></form>`;
   }
 
   private ingredientFields(ingredient: Partial<Omit<RecipeIngredient, "nutrition">> & { nutrition?: Partial<RecipeIngredient["nutrition"]> }, index: number): string {
@@ -542,6 +549,10 @@ export class DaybookApp {
     this.render();
 
     try {
+      // The free path first. A packaged food with a readable barcode never reaches the model,
+      // which is both instant and the reason most days cost nothing at all.
+      if (mode === "label" && await this.applyBarcode(file, draft, note)) return;
+
       const image = await this.prepareCapture(file);
       const result = await this.capture.send({ mode, imageBase64: image.base64, mimeType: image.mimeType, note: note || null });
       if (this.modal?.kind !== "food") return;
@@ -558,6 +569,31 @@ export class DaybookApp {
       this.modal = { ...this.modal, draft, capturing: undefined, captureNote: note, aiMessage: undefined, aiError: this.captureMessage(error) };
     }
     this.render();
+  }
+
+  /**
+   * Try Open Food Facts for this photo. Returns true when it filled the form, false to fall
+   * through to the AI read of the same photo — a miss is routing, not an error, so the user
+   * is never told that a lookup they did not ask for failed.
+   */
+  private async applyBarcode(file: Blob, draft: FoodInput, note: string): Promise<boolean> {
+    let result: BarcodeResult;
+    try {
+      result = await this.capture.scan(file);
+    } catch {
+      return false;
+    }
+    if (!result.found || this.modal?.kind !== "food") return false;
+    this.modal = {
+      ...this.modal,
+      draft: captureToFoodDraft(draft, result.food),
+      capturing: undefined,
+      captureNote: note,
+      aiMessage: "Found in the free product database. No AI capture used.",
+      aiError: undefined,
+    };
+    this.render();
+    return true;
   }
 
   private async prepareCapture(file: Blob): Promise<CapturedImage> {

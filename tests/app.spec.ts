@@ -106,11 +106,12 @@ describe("food photo capture", () => {
     return root;
   };
 
-  const deps = (overrides: Partial<FoodCaptureDeps> = {}): FoodCaptureDeps & { send: ReturnType<typeof vi.fn> } => ({
+  const deps = (overrides: Partial<FoodCaptureDeps> = {}): FoodCaptureDeps & { send: ReturnType<typeof vi.fn>; scan: ReturnType<typeof vi.fn> } => ({
     prepare: vi.fn(async () => ({ base64: "UEhPVE8=", mimeType: "image/jpeg" as const, width: 768, height: 512, bytes: 5 })),
     send: vi.fn(async () => ({ food: reply, remaining: { today: 38, month: 498 } })),
+    scan: vi.fn(async () => ({ found: false as const, reason: "no-barcode" as const })),
     ...overrides,
-  } as FoodCaptureDeps & { send: ReturnType<typeof vi.fn> });
+  } as FoodCaptureDeps & { send: ReturnType<typeof vi.fn>; scan: ReturnType<typeof vi.fn> });
 
   /** Choose a photo the way the file picker does, so the app's own change handler runs. */
   const choosePhoto = (root: HTMLElement, mode: "label" | "estimate"): void => {
@@ -123,7 +124,7 @@ describe("food photo capture", () => {
     const root = openEditor(deps());
 
     expect(root.querySelector(".ai-assist")?.textContent).toContain("Add it from a photo");
-    expect(root.querySelector<HTMLElement>('[data-action="capture"][data-mode="label"]')?.textContent).toContain("Scan a label");
+    expect(root.querySelector<HTMLElement>('[data-action="capture"][data-mode="label"]')?.textContent).toContain("Scan a package");
     expect(root.querySelector<HTMLElement>('[data-action="capture"][data-mode="estimate"]')?.textContent).toContain("Estimate this plate");
     expect(root.querySelector('[data-action="ask-food-ai"]')).toBeNull();
     expect(root.querySelector('[data-action="apply-food-clipboard"]')).toBeNull();
@@ -210,5 +211,42 @@ describe("food photo capture", () => {
     expect([...root.querySelectorAll('[data-action="capture"]')].every((node) => node.hasAttribute("disabled"))).toBe(true);
     release();
     await vi.waitFor(() => expect(root.querySelector<HTMLInputElement>('form[data-form="food"] input[name="name"]')?.value).toBe("Greek yogurt"));
+  });
+  it("fills the form from the free product database without spending a capture", async () => {
+    const offFood = { name: "Chunky peanut butter", brand: "Skippy", serving: { amount: 32, unit: "g", description: "2 tbsp (32 g)" }, nutrition: { calories: 190, proteinG: 7 } };
+    const capture = deps({ scan: vi.fn(async () => ({ found: true as const, food: offFood, code: "037600106245" })) as FoodCaptureDeps["scan"] });
+    const root = openEditor(capture);
+
+    root.querySelector<HTMLElement>('[data-action="capture"][data-mode="label"]')!.click();
+    choosePhoto(root, "label");
+
+    await vi.waitFor(() => expect(root.querySelector<HTMLInputElement>('form[data-form="food"] input[name="name"]')?.value).toBe("Chunky peanut butter"));
+    expect(root.querySelector<HTMLInputElement>('form[data-form="food"] input[name="calories"]')?.value).toBe("190");
+    expect(root.querySelector(".ai-assist")?.textContent).toContain("No AI capture used.");
+    expect(capture.send).not.toHaveBeenCalled();
+    expect(capture.prepare).not.toHaveBeenCalled();
+  });
+
+  it("falls through to the AI read when the photo holds no known barcode", async () => {
+    const capture = deps();
+    const root = openEditor(capture);
+
+    root.querySelector<HTMLElement>('[data-action="capture"][data-mode="label"]')!.click();
+    choosePhoto(root, "label");
+
+    await vi.waitFor(() => expect(capture.send).toHaveBeenCalled());
+    expect(capture.scan).toHaveBeenCalled();
+    expect(capture.send.mock.calls[0]![0]).toMatchObject({ mode: "label" });
+  });
+
+  it("does not waste a barcode lookup on a plate of food", async () => {
+    const capture = deps();
+    const root = openEditor(capture);
+
+    root.querySelector<HTMLElement>('[data-action="capture"][data-mode="estimate"]')!.click();
+    choosePhoto(root, "estimate");
+
+    await vi.waitFor(() => expect(capture.send).toHaveBeenCalled());
+    expect(capture.scan).not.toHaveBeenCalled();
   });
 });
