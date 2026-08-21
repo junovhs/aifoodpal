@@ -244,7 +244,9 @@ const SHARED_RULES = `Rules:
 const LABEL_RULES = `This photo is a printed nutrition facts panel.
 
 - Transcribe what the panel states. Do not estimate, and do not substitute typical values for the food.
-- Use the serving size exactly as printed, including its unit.
+- Serving size: when the panel gives both a household measure and a metric weight, put the metric weight in serving.amount and serving.unit (for "2/3 cup (55g)" that is amount 55, unit "g") and keep the printed text in serving.description. Grams are unambiguous; household measures are not.
+- If only a household measure is printed, express any fraction as a decimal: "2/3 cup" is amount 0.67, not amount 2.
+- The food's name is the product's name as printed on the packaging. Never name it after a heading on the panel such as "Nutrition Facts" or "Supplement Facts". If no product name appears anywhere in the photo, set name to exactly "Unnamed food" and let the user fill it in — do not invent one and do not fall back to a heading.
 - Read the gram and milligram figures, not the % Daily Value column.
 - If a nutrient is not printed on the panel, return null for it rather than guessing.
 - Set sourceType to "label". Set confidence to "high" only when the panel is fully legible.`;

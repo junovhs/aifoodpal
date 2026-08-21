@@ -90,6 +90,25 @@ describe("buildCapturePrompt", () => {
     expect(prompt).toContain("The user added no extra context.");
   });
 
+  it("pins a label serving to the unambiguous metric weight", () => {
+    const prompt = buildCapturePrompt("label");
+
+    expect(prompt).toContain("amount 55");
+    expect(prompt).toContain("amount 0.67, not amount 2");
+    expect(prompt).toContain("keep the printed text in serving.description");
+  });
+
+  it("refuses to name a food after the panel heading", () => {
+    const label = buildCapturePrompt("label");
+
+    expect(label).toContain("Nutrition Facts");
+    expect(label).toContain("Never name it after a heading");
+    expect(label).toContain('set name to exactly "Unnamed food"');
+    // Estimate mode reads a plate, not a panel, so none of this applies there.
+    expect(buildCapturePrompt("estimate")).not.toContain("Never name it after a heading");
+    expect(buildCapturePrompt("estimate")).not.toContain("amount 0.67");
+  });
+
   it("embeds the note as authoritative in estimate mode", () => {
     const prompt = buildCapturePrompt("estimate", "  it's lamb, not beef, and it was fatty  ");
 
