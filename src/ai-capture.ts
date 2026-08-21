@@ -1,4 +1,27 @@
-import type { Confidence, FoodInput, SourceType } from "./model";
+/**
+ * The wire contract for photo capture, shared verbatim by the browser and the Deno Edge
+ * Function. It imports nothing on purpose: the function's module graph has to be resolvable
+ * by Deno from the files the deploy uploads, and reaching into the app's domain model pulled
+ * in a chain (model -> units -> ...) that was never uploaded and failed to boot.
+ */
+
+/** How confident the model is in what it produced. Mirrors the domain model's own union. */
+export type CaptureConfidence = "high" | "medium" | "low";
+
+/** Where the figures came from. Mirrors the domain model's own union. */
+export type CaptureSourceType = "user" | "label" | "restaurant" | "estimate";
+
+/** Exactly what a capture returns: structurally a FoodInput, but owned by the contract. */
+export interface CapturedFood {
+  name: string;
+  brand: string | null;
+  serving: { amount: number; unit: string; description: string };
+  nutrition: Record<string, number | null>;
+  sourceType: CaptureSourceType;
+  confidence: CaptureConfidence;
+  notes: string | null;
+  recipe?: { ingredients: Array<{ name: string; amount: number | null; unit: string }>; instructions: string | null } | null;
+}
 
 /**
  * How a photo should be read. `label` transcribes a printed nutrition panel; `estimate`
@@ -23,8 +46,8 @@ export const MODEL_FOR_MODE: Record<CaptureMode, string> = {
 /** Long enough for real context ("it's lamb, not beef, and it was fatty"), short enough to bound cost. */
 export const NOTE_MAX_CHARS = 500;
 
-const SOURCE_TYPES: readonly SourceType[] = ["user", "label", "restaurant", "estimate"];
-const CONFIDENCE_LEVELS: readonly Confidence[] = ["high", "medium", "low"];
+const SOURCE_TYPES: readonly CaptureSourceType[] = ["user", "label", "restaurant", "estimate"];
+const CONFIDENCE_LEVELS: readonly CaptureConfidence[] = ["high", "medium", "low"];
 
 /** Macros the model must always return a value or an explicit null for — never omit. */
 export const CORE_MACROS = ["calories", "proteinG", "carbsG", "fatG", "fiberG"] as const;
@@ -145,7 +168,7 @@ const readNullableString = (value: unknown, field: string): string | null => {
  * Structured output makes conformance overwhelmingly likely, not guaranteed — a truncated
  * or safety-filtered generation still has to be refused rather than half-applied.
  */
-export const validateCapturePayload = (value: unknown): FoodInput => {
+export const validateCapturePayload = (value: unknown): CapturedFood => {
   if (!isRecord(value)) fail("The reply was not a JSON object.");
   const record = value as Record<string, unknown>;
 
@@ -167,14 +190,14 @@ export const validateCapturePayload = (value: unknown): FoodInput => {
     nutrition[key] = readNullableNumber(source[key], `nutrition.${key}`);
   }
 
-  const sourceType = SOURCE_TYPES.includes(record.sourceType as SourceType) ? record.sourceType as SourceType : "estimate";
-  const confidence = CONFIDENCE_LEVELS.includes(record.confidence as Confidence) ? record.confidence as Confidence : "low";
+  const sourceType = SOURCE_TYPES.includes(record.sourceType as CaptureSourceType) ? record.sourceType as CaptureSourceType : "estimate";
+  const confidence = CONFIDENCE_LEVELS.includes(record.confidence as CaptureConfidence) ? record.confidence as CaptureConfidence : "low";
 
-  const food: FoodInput = {
+  const food: CapturedFood = {
     name: name.trim(),
     brand: readNullableString(record.brand, "brand"),
     serving: { amount, unit: (serving.unit as string).trim(), description: typeof serving.description === "string" ? serving.description : "" },
-    nutrition: nutrition as FoodInput["nutrition"],
+    nutrition,
     sourceType,
     confidence,
     notes: readNullableString(record.notes, "notes"),
@@ -201,7 +224,7 @@ export const validateCapturePayload = (value: unknown): FoodInput => {
 };
 
 /** Parse raw JSON text from the model, then validate it. */
-export const parseCapturePayload = (json: string): FoodInput => {
+export const parseCapturePayload = (json: string): CapturedFood => {
   let decoded: unknown;
   try {
     decoded = JSON.parse(json);
@@ -209,33 +232,6 @@ export const parseCapturePayload = (json: string): FoodInput => {
     throw new CaptureContractError("invalid-json", "The AI reply was not valid JSON.");
   }
   return validateCapturePayload(decoded);
-};
-
-/**
- * Merge a validated reply onto the draft currently in the food form. A null or absent value
- * never erases something the user already knows: the model returns null for "not stated on
- * the panel", which must not wipe a figure typed by hand.
- */
-export const captureToFoodDraft = (current: FoodInput, payload: unknown): FoodInput => {
-  const incoming = validateCapturePayload(payload);
-  const nutrition: Record<string, unknown> = { ...(current.nutrition ?? {}) };
-  for (const [key, value] of Object.entries(incoming.nutrition ?? {})) {
-    if (value !== null && value !== undefined) nutrition[key] = value;
-    else if (!(key in nutrition)) nutrition[key] = null;
-  }
-
-  const merged: FoodInput = {
-    ...current,
-    ...incoming,
-    brand: incoming.brand ?? current.brand ?? null,
-    notes: incoming.notes ?? current.notes ?? null,
-    serving: { ...(current.serving ?? {}), ...(incoming.serving ?? {}) },
-    nutrition: nutrition as FoodInput["nutrition"],
-    recipe: incoming.recipe ?? current.recipe ?? null,
-  };
-  if (current.id) merged.id = current.id;
-  else delete merged.id;
-  return merged;
 };
 
 const SHARED_RULES = `Rules:

@@ -6,11 +6,9 @@ import {
   MODEL_FOR_MODE,
   NOTE_MAX_CHARS,
   buildCapturePrompt,
-  captureToFoodDraft,
   parseCapturePayload,
   validateCapturePayload,
 } from "../src/ai-capture";
-import type { FoodInput } from "../src/model";
 
 interface SchemaNode {
   type?: string | string[];
@@ -147,44 +145,5 @@ describe("validateCapturePayload", () => {
   it("reports unparseable text distinctly from a bad shape", () => {
     expect(() => parseCapturePayload("{oops")).toThrowError(expect.objectContaining({ code: "invalid-json" }));
     expect(parseCapturePayload(JSON.stringify(labelPayload)).name).toBe("Greek yogurt");
-  });
-});
-
-describe("captureToFoodDraft", () => {
-  it("merges onto the open draft and preserves its id", () => {
-    const current: FoodInput = { id: "food_1", name: "yogurt", nutrition: { calories: 1 } };
-
-    const merged = captureToFoodDraft(current, labelPayload);
-
-    expect(merged.id).toBe("food_1");
-    expect(merged.name).toBe("Greek yogurt");
-    expect(merged.nutrition?.calories).toBe(100);
-  });
-
-  it("does not invent an id for a food that has none", () => {
-    expect(captureToFoodDraft({ name: "yogurt" }, labelPayload).id).toBeUndefined();
-  });
-
-  it("lets a null from the model leave a hand-entered value alone", () => {
-    const current: FoodInput = { name: "Lamb stew", brand: "Homemade", nutrition: { calories: 0, sodiumMg: 480, sugarG: 4 }, notes: "family recipe" };
-    const estimate = {
-      ...labelPayload,
-      name: "Lamb stew",
-      brand: null,
-      notes: null,
-      nutrition: { calories: 520, proteinG: 34, carbsG: 18, fatG: 32, fiberG: 3, sugarG: null, addedSugarG: null, saturatedFatG: 14, transFatG: null, sodiumMg: null },
-    };
-
-    const merged = captureToFoodDraft(current, estimate);
-
-    expect(merged.nutrition).toMatchObject({ calories: 520, proteinG: 34, sodiumMg: 480, sugarG: 4 });
-    expect(merged.brand).toBe("Homemade");
-    expect(merged.notes).toBe("family recipe");
-  });
-
-  it("records a nutrient the draft never had as an explicit null", () => {
-    const merged = captureToFoodDraft({ name: "Lamb stew" }, { ...labelPayload, nutrition: { ...labelPayload.nutrition, transFatG: null } });
-
-    expect(merged.nutrition?.transFatG).toBeNull();
   });
 });

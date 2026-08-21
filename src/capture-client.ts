@@ -1,5 +1,5 @@
 import { supabase, supabaseConfig } from "./supabase";
-import type { CaptureMode } from "./ai-capture";
+import { validateCapturePayload, type CaptureMode } from "./ai-capture";
 import type { FoodInput } from "./model";
 
 /** Why a capture could not be completed, mirroring the function's codes plus client-only cases. */
@@ -83,4 +83,35 @@ export const captureFoodViaSupabase: CaptureFoodClient = async (request) => {
     throw new CaptureError(body.code ?? "ai-unavailable", body.error ?? "Photo capture failed. Try again.");
   }
   return { food: body.food, remaining: body.remaining ?? { today: 0, month: 0 } };
+};
+
+/**
+ * Merge a validated reply onto the draft currently in the food form.
+ *
+ * Lives here rather than in the wire contract because it is the one piece of capture that
+ * needs the app's domain model, and the contract has to stay importable by the Edge Function.
+ *
+ * A null or absent value never erases something the user already knows: the model returns
+ * null for "not stated on the panel", which must not wipe a figure typed by hand.
+ */
+export const captureToFoodDraft = (current: FoodInput, payload: unknown): FoodInput => {
+  const incoming = validateCapturePayload(payload);
+  const nutrition: Record<string, unknown> = { ...(current.nutrition ?? {}) };
+  for (const [key, value] of Object.entries(incoming.nutrition ?? {})) {
+    if (value !== null && value !== undefined) nutrition[key] = value;
+    else if (!(key in nutrition)) nutrition[key] = null;
+  }
+
+  const merged: FoodInput = {
+    ...current,
+    ...incoming,
+    brand: incoming.brand ?? current.brand ?? null,
+    notes: incoming.notes ?? current.notes ?? null,
+    serving: { ...(current.serving ?? {}), ...(incoming.serving ?? {}) },
+    nutrition: nutrition as FoodInput["nutrition"],
+    recipe: incoming.recipe ?? current.recipe ?? null,
+  };
+  if (current.id) merged.id = current.id;
+  else delete merged.id;
+  return merged;
 };

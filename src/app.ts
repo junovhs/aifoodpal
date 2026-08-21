@@ -1,7 +1,7 @@
 import { applyAiResponse, buildAiPrompt, parseAiResponse, type AiResponse } from "./ai";
-import { NOTE_MAX_CHARS, captureToFoodDraft, type CaptureMode } from "./ai-capture";
+import { NOTE_MAX_CHARS, type CaptureMode } from "./ai-capture";
 import { prepareImage, type CapturedImage } from "./image";
-import { CaptureError, captureFoodViaSupabase, type CaptureFoodClient } from "./capture-client";
+import { CaptureError, captureFoodViaSupabase, captureToFoodDraft, type CaptureFoodClient } from "./capture-client";
 import { decodeBarcode, lookupOpenFoodFacts, scanBarcode, type BarcodeResult } from "./barcode";
 import { createEntry, createQuickCalorieEntry, isoDate, moveDiaryEntry, normalizeFood, normalizePeriod, PERIODS, protectedSnackBudget, removeFoodFromLibrary, uid, type AppState, type Food, type FoodInput, type Period, type RecipeIngredient } from "./model";
 import { calorieGuidance, dailyCalorieGuide, formatDate, kgToPounds, latestWeight, nutritionTargets, poundsToKg, round, shiftDate, totalsFor } from "./nutrition";

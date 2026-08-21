@@ -7,8 +7,8 @@ import {
   buildCapturePrompt,
   validateCapturePayload,
   type CaptureMode,
-} from "../../../src/ai-capture";
-import type { FoodInput } from "../../../src/model";
+  type CapturedFood,
+} from "../../../src/ai-capture.ts";
 
 /**
  * Decoded-byte ceiling for an uploaded photo. IMG-01 fits captures to a 768px long edge,
@@ -44,7 +44,7 @@ export interface AiFoodRequest {
 /** A validated food draft plus the caller's remaining allowance. */
 export interface AiFoodSuccessBody {
   ok: true;
-  food: FoodInput;
+  food: CapturedFood;
   remaining: { today: number; month: number };
 }
 
@@ -150,7 +150,7 @@ export const handleAiFood = async (payload: unknown, deps: AiFoodDeps): Promise<
     return errorBody(502, "ai-unavailable", error instanceof Error ? error.message : "The AI service did not respond.");
   }
 
-  let food: FoodInput;
+  let food: CapturedFood;
   try {
     food = validateCapturePayload(JSON.parse(raw) as unknown);
   } catch (error) {
