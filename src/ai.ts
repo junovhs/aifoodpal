@@ -13,10 +13,52 @@ export interface AiResponse { schemaVersion: 1; summary?: string; operations: Ai
 const isOperation = (value: unknown): value is AiOperation =>
   Boolean(value && typeof value === "object" && ["upsertFood", "addEntry", "addWeight", "updateProfile", "setGoal"].includes(String((value as { type?: unknown }).type)));
 
+const repairJsonText = (value: string): string => {
+  const text = value
+    .replace(/[\u200B-\u200D\u2060\uFEFF]/g, "")
+    .replace(/[\u00A0\u202F]/g, " ")
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'");
+  let repaired = "";
+  let quoted = false;
+  let escaped = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]!;
+    if (quoted) {
+      repaired += char;
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') quoted = false;
+      continue;
+    }
+    if (char === '"') { quoted = true; repaired += char; continue; }
+    if (char === ",") {
+      let next = index + 1;
+      while (/\s/.test(text[next] ?? "")) next += 1;
+      if (text[next] === "}" || text[next] === "]") continue;
+    }
+    repaired += char;
+  }
+  return repaired;
+};
+
+const parseCandidate = (value: string, candidates: unknown[]): void => {
+  const variants = [value, repairJsonText(value)];
+  for (const variant of variants) {
+    try {
+      const parsed = JSON.parse(variant) as unknown;
+      candidates.push(parsed);
+      // Some mobile share/copy paths leave the entire JSON response encoded as a JSON string.
+      if (typeof parsed === "string" && parsed !== variant) parseCandidate(parsed, candidates);
+      return;
+    } catch { /* Try the next conservative repair. */ }
+  }
+};
+
 const jsonCandidates = (input: string): unknown[] => {
   const text = input.replace(/^\uFEFF/, "").trim();
   const candidates: unknown[] = [];
-  try { candidates.push(JSON.parse(text)); } catch { /* Try extracting JSON from an AI wrapper below. */ }
+  parseCandidate(text, candidates);
 
   for (let start = 0; start < text.length; start += 1) {
     if (text[start] !== "{" && text[start] !== "[") continue;
@@ -37,7 +79,7 @@ const jsonCandidates = (input: string): unknown[] => {
         const expected = char === "}" ? "{" : "[";
         if (stack.pop() !== expected) break;
         if (stack.length === 0) {
-          try { candidates.push(JSON.parse(text.slice(start, end + 1))); } catch { /* Keep looking. */ }
+          parseCandidate(text.slice(start, end + 1), candidates);
           break;
         }
       }
@@ -51,7 +93,10 @@ export const parseAiResponse = (json: string): AiResponse => {
   const objects = candidates.filter((candidate): candidate is Partial<AiResponse> => Boolean(candidate && typeof candidate === "object"));
   const value = objects.find((candidate) => "schemaVersion" in candidate && "operations" in candidate)
     ?? objects.find((candidate) => "schemaVersion" in candidate || "operations" in candidate);
-  if (!value) throw new Error("That text is not valid JSON for an AI response. Paste the complete reply; extra text and code fences are okay.");
+  if (!value) {
+    if (objects.length) throw new Error("JSON was found, but it is not an AIfoodpal response. Paste the complete AI reply.");
+    throw new Error("No usable JSON was found. Paste the complete AI reply; code fences and extra text are okay.");
+  }
   if (value.schemaVersion !== 1) {
     throw new Error(value.schemaVersion == null ? "The AI response is missing schemaVersion 1." : `Schema version ${value.schemaVersion} is not supported.`);
   }
@@ -88,7 +133,21 @@ PARTIAL FOOD:
 ${JSON.stringify(draft, null, 2)}`;
 
 export const importFoodDraft = (current: FoodInput, json: string): FoodInput => {
-  const response = parseAiResponse(json);
+  let response: AiResponse;
+  try {
+    response = parseAiResponse(json);
+  } catch (error) {
+    const direct = jsonCandidates(json).find((candidate): candidate is Record<string, unknown> => Boolean(candidate && typeof candidate === "object" && !Array.isArray(candidate)));
+    const food = direct?.type === "upsertFood" && direct.food && typeof direct.food === "object"
+      ? direct.food
+      : direct?.food && typeof direct.food === "object"
+        ? direct.food
+        : direct && ("name" in direct || "nutrition" in direct || "serving" in direct)
+          ? direct
+          : null;
+    if (!food) throw error;
+    response = { schemaVersion: 1, operations: [{ type: "upsertFood", food: food as FoodInput }] };
+  }
   const operation = response.operations.find((item): item is UpsertFoodOperation => item.type === "upsertFood");
   if (!operation) throw new Error("The AI response does not contain an upsertFood operation.");
   if (!operation.food || typeof operation.food !== "object") throw new Error("The upsertFood operation is missing its food data.");

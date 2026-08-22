@@ -217,7 +217,7 @@ describe("AI bridge", () => {
   });
 
   it("gives useful food-import errors", () => {
-    expect(() => importFoodDraft({}, "not json")).toThrow(/not valid JSON/i);
+    expect(() => importFoodDraft({}, "not json")).toThrow(/No usable JSON/i);
     expect(() => importFoodDraft({}, '{"schemaVersion":2,"operations":[]}')).toThrow(/not supported/i);
     expect(() => importFoodDraft({}, '{"schemaVersion":1,"operations":[]}')).toThrow(/upsertFood/i);
   });
@@ -226,6 +226,21 @@ describe("AI bridge", () => {
     const reply = '{"schemaVersion":1,"summary":"Done","operations":[{"type":"upsertFood","food":{"name":"Toast","nutrition":{"calories":120}}}]}';
     expect(parseAiResponse(`\uFEFF\n\`\`\`json\n${reply}\n\`\`\``).summary).toBe("Done");
     expect(parseAiResponse(`Here is the result:\n${reply}\nYou can paste it into the app.`).operations).toHaveLength(1);
+  });
+
+  it("repairs common mobile AI copy formatting", () => {
+    const trailing = 'Here you go: {“schemaVersion”:1,“operations”:[{“type”:“upsertFood”,“food”:{“name”:“Toast”,“nutrition”:{“calories”:120,},},}],}';
+    expect(importFoodDraft({}, trailing)).toMatchObject({ name: "Toast", nutrition: { calories: 120 } });
+    const encoded = JSON.stringify('{"schemaVersion":1,"operations":[{"type":"upsertFood","food":{"name":"Soup","nutrition":{"calories":90}}}]}');
+    expect(importFoodDraft({}, encoded).name).toBe("Soup");
+  });
+
+  it("accepts a direct food object when an AI omits the response envelope", () => {
+    expect(importFoodDraft({}, '{"name":"Apple","serving":{"amount":1,"unit":"piece"},"nutrition":{"calories":95}}')).toMatchObject({
+      name: "Apple",
+      serving: { amount: 1, unit: "piece" },
+      nutrition: { calories: 95 },
+    });
   });
 
   it("validates and applies food, entry, weight, and goal operations", () => {
