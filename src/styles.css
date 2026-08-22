@@ -386,6 +386,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); backgro
   .sidenav .nav .icon { width: 21px; height: 21px; }
   .sidebottom { display: flex; align-items: flex-start; gap: 9px; margin-top: auto; padding: 12px 9px; color: var(--muted); font-size: 11px; line-height: 1.5; }.sidebottom .icon { width: 17px; height: 17px; margin-top: 1px; color: var(--accent); }
   .main { max-width: 1040px; padding-inline: 44px; }
+  .top { min-height: 62px; }
+  .view { padding-top: 6px; }
   .top .wordmark { visibility: hidden; }
   .bottom { display: none; }
   .toast { bottom: 28px; }

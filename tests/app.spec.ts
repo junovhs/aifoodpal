@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { DaybookApp, type FoodCaptureDeps } from "../src/app";
 import { CaptureError } from "../src/capture-client";
 import { createEntry, createState, normalizeFood, type AppState } from "../src/model";
@@ -316,5 +316,74 @@ describe("food photo capture", () => {
 
     await vi.waitFor(() => expect(capture.send).toHaveBeenCalled());
     expect(capture.scan).not.toHaveBeenCalled();
+  });
+});
+
+describe("Today layout by viewport", () => {
+  const realMatchMedia = window.matchMedia;
+  afterEach(() => { window.matchMedia = realMatchMedia; });
+
+  /** Drives the one media query the app asks about, so each layout branch is testable under jsdom. */
+  const stubViewport = (wide: boolean) => {
+    const listeners = new Set<() => void>();
+    const query = {
+      matches: wide,
+      addEventListener: (_type: string, listener: () => void) => { listeners.add(listener); },
+      removeEventListener: (_type: string, listener: () => void) => { listeners.delete(listener); },
+    };
+    window.matchMedia = ((media: string) => media === "(min-width: 900px)" ? query : { matches: false, addEventListener() {}, removeEventListener() {} }) as unknown as typeof window.matchMedia;
+    return (next: boolean) => { query.matches = next; for (const listener of listeners) listener(); };
+  };
+
+  const dayState = () => {
+    const state = createState("2026-08-20");
+    Object.assign(state.profile, { onboardingComplete: true, manualDailyGuide: 2000 });
+    const food = normalizeFood({ name: "Everyday meal", serving: { amount: 1, unit: "serving" }, nutrition: { calories: 180, proteinG: 12, carbsG: 20, fatG: 6, fiberG: 3 } });
+    for (const period of ["breakfast", "lunch", "dinner", "snacks"] as const) state.entries.push(createEntry(food, state.prefs.date, period));
+    return state;
+  };
+
+  it("renders the desktop diary with entries inline on a wide viewport", () => {
+    stubViewport(true);
+    const root = document.createElement("main");
+
+    new DaybookApp(root, { load: () => dayState(), save: vi.fn() }).start();
+
+    expect(root.querySelector(".today-screen")).toBeNull();
+    expect(root.querySelector(".view")?.classList.contains("today-view")).toBe(false);
+    expect(root.querySelector(".summary .guide .big")?.textContent).toBe("720");
+    expect(root.querySelector(".summary-note")?.textContent).toContain("1,280");
+    expect(root.querySelector(".calorie-scale")).not.toBeNull();
+    expect(root.querySelectorAll(".summary .macro .macro-icon")).toHaveLength(4);
+    const groups = [...root.querySelectorAll<HTMLElement>(".mealgroup")];
+    expect(groups.map((group) => group.dataset.period)).toEqual(["breakfast", "lunch", "dinner", "snacks"]);
+    expect(root.querySelectorAll(".mealgroup .entry")).toHaveLength(4);
+    expect(root.querySelector('form[data-form="snack-budget"]')).toBeNull();
+  });
+
+  it("keeps the phone dashboard on a narrow viewport", () => {
+    stubViewport(false);
+    const root = document.createElement("main");
+
+    new DaybookApp(root, { load: () => dayState(), save: vi.fn() }).start();
+
+    expect(root.querySelector(".today-screen")).not.toBeNull();
+    expect(root.querySelector(".view")?.classList.contains("today-view")).toBe(true);
+    expect(root.querySelectorAll(".meal-row")).toHaveLength(4);
+    expect(root.querySelector(".mealgroup")).toBeNull();
+  });
+
+  it("swaps layouts when the viewport crosses the breakpoint", () => {
+    const setWide = stubViewport(false);
+    const root = document.createElement("main");
+    new DaybookApp(root, { load: () => dayState(), save: vi.fn() }).start();
+
+    setWide(true);
+    expect(root.querySelector(".today-screen")).toBeNull();
+    expect(root.querySelectorAll(".mealgroup")).toHaveLength(4);
+
+    setWide(false);
+    expect(root.querySelector(".today-screen")).not.toBeNull();
+    expect(root.querySelector(".mealgroup")).toBeNull();
   });
 });

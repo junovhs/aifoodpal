@@ -42,6 +42,8 @@ export class DaybookApp {
   private syncStatus?: SyncStatus;
   private syncOpen = false;
   private readonly mounted = new WeakMap<HTMLElement, string>();
+  /** The desktop breakpoint, matching the sidebar rule in styles.css. Absent in environments without matchMedia, which then get the phone layout. */
+  private readonly wideQuery = typeof window !== "undefined" && typeof window.matchMedia === "function" ? window.matchMedia("(min-width: 900px)") : null;
 
   constructor(
     private readonly root: HTMLElement,
@@ -75,6 +77,7 @@ export class DaybookApp {
         },
       );
     }
+    this.wideQuery?.addEventListener("change", () => this.render());
     this.render();
     new DiaryDragController(
       this.root,
@@ -92,7 +95,7 @@ export class DaybookApp {
 
   private render(): void {
     const brand = `<div class="wordmark"><span class="brandmark">${icon("NotebookTabs")}</span><span><b>AI</b>foodpal</span></div>`;
-    this.root.innerHTML = `<div class="shell"><aside class="side">${brand}${this.nav()}<div class="sidebottom">${icon("ShieldCheck")}<span>Private by default.<br>Stored in this browser.</span></div></aside><main class="main"><header class="top">${brand}<div class="top-actions">${this.account ? `<div class="account-host" data-account-header>${this.account.headerHtml()}</div>` : ""}</div></header><div class="view ${this.view === "day" && !this.mealPeriod ? "today-view" : ""}" data-scroll-pane>${this.content()}</div>${this.nav(true)}</main></div>${this.modalHtml()}${this.syncStatus ? `<div data-sync-modal>${this.syncModalHtml()}</div>` : ""}${this.account ? `<div data-account-modal>${this.account.modalHtml()}</div>` : ""}<div class="toast" id="toast"></div>`;
+    this.root.innerHTML = `<div class="shell"><aside class="side">${brand}${this.nav()}<div class="sidebottom">${icon("ShieldCheck")}<span>Private by default.<br>Stored in this browser.</span></div></aside><main class="main"><header class="top">${brand}<div class="top-actions">${this.account ? `<div class="account-host" data-account-header>${this.account.headerHtml()}</div>` : ""}</div></header><div class="view ${this.view === "day" && !this.mealPeriod && !this.wide() ? "today-view" : ""}" data-scroll-pane>${this.content()}</div>${this.nav(true)}</main></div>${this.modalHtml()}${this.syncStatus ? `<div data-sync-modal>${this.syncModalHtml()}</div>` : ""}${this.account ? `<div data-account-modal>${this.account.modalHtml()}</div>` : ""}<div class="toast" id="toast"></div>`;
     renderIcons(this.root);
   }
 
@@ -150,14 +153,19 @@ export class DaybookApp {
     return bottom ? `<nav class="bottom">${buttons}</nav>` : `<nav class="sidenav">${buttons}</nav>`;
   }
 
+  /** True when the viewport has room for the desktop diary; false on phones and wherever matchMedia is unavailable. */
+  private wide(): boolean {
+    return this.wideQuery?.matches === true;
+  }
+
   private content(): string {
     if (!this.state.profile.onboardingComplete) return this.onboarding();
-    if (this.view === "day" && this.mealPeriod) return this.mealView(this.mealPeriod);
+    if (this.view === "day" && this.mealPeriod && !this.wide()) return this.mealView(this.mealPeriod);
     if (this.view === "calendar") return this.calendar();
     if (this.view === "library") return this.library();
     if (this.view === "trend") return this.trend();
     if (this.view === "settings") return this.settings();
-    return this.day();
+    return this.wide() ? this.dayDesktop() : this.day();
   }
 
   private calendar(): string {
@@ -192,6 +200,42 @@ export class DaybookApp {
       : "";
     const guideLine = guide ? `${fmt(totals.calories)} of ${fmt(guide)} kcal` : `${fmt(totals.calories)} kcal logged`;
     return `<div class="today-screen"><div class="today-date"><button class="icon-btn" data-action="date" data-days="-1" aria-label="Previous day">${icon("ChevronLeft")}</button><h1>${formatDate(date, true)}</h1><button class="icon-btn" data-action="date" data-days="1" aria-label="Next day">${icon("ChevronRight")}</button><button class="today-btn" data-action="today">Today</button></div><section class="today-hero" aria-label="Daily nutrition summary"><div class="today-remaining"><strong>${remaining == null ? "—" : fmt(remaining)}</strong><span>kcal remaining</span></div><div class="today-progress" role="progressbar" aria-label="${guideLine}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${fmt(pct)}"><span style="width:${pct}%"></span></div><div class="today-progress-label">${guideLine}</div>${budgetWarning}<div class="macros">${this.macro("protein", totals.proteinG, targets?.proteinG)}${this.macro("carbs", totals.carbsG, targets?.carbsG)}${this.macro("fat", totals.fatG, targets?.fatG)}${this.macro("fiber", totals.fiberG, targets?.fiberG)}</div></section><div class="today-meals" aria-label="Meals">${meals}</div><button class="btn-primary btn-icon today-add" data-action="choose-food">${icon("Plus")}<span>Add food</span></button></div>`;
+  }
+
+  /** The diary that shipped before SHEL-01, kept for viewports with room to show entries inline. */
+  private dayDesktop(): string {
+    const date = this.state.prefs.date;
+    const totals = totalsFor(this.state, date);
+    const guide = dailyCalorieGuide(this.state.profile);
+    const targets = nutritionTargets(this.state.profile);
+    const pct = guide ? Math.min(100, totals.calories / guide * 100) : 0;
+    const meals = PERIODS.map((period) => this.mealGroup(period, date)).join("");
+    const remaining = guide ? Math.max(0, guide - totals.calories) : null;
+    const snackTotal = totalsFor(this.state, date, "snacks").calories;
+    const snackProtected = Boolean(guide && this.state.prefs.protectedSnackBudgetEnabled);
+    const budget = guide ? protectedSnackBudget(guide, snackProtected ? this.state.prefs.protectedSnackCalories : guide / 4, totals.calories - snackTotal) : null;
+    const mainSegmentWidth = budget ? budget.mainPercent / 3 : 25;
+    const snackSegmentWidth = budget ? 100 - budget.mainPercent : 25;
+    const segmentCalories = guide && budget ? [budget.mainCalories / 3, budget.mainCalories / 3, budget.mainCalories / 3, budget.snackCalories] : [];
+    const segmentLabels = PERIODS.map((period, index) => `<span class="scale-segment ${period}" style="width:${period === "snacks" ? snackSegmentWidth : mainSegmentWidth}%"><strong>${period}</strong>${guide ? `<small>${fmt(segmentCalories[index])} kcal</small>` : ""}</span>`).join("");
+    const overrun = snackProtected && budget?.encroachmentCalories ? `<span class="scale-overrun" style="left:${budget.mainPercent}%;width:${budget.encroachmentPercent}%" aria-label="Main meals used ${fmt(budget.encroachmentCalories)} protected snack calories"></span>` : "";
+    const budgetWarning = snackProtected && budget?.encroachmentCalories ? `<span class="budget-warning">${fmt(budget.encroachmentCalories)} protected snack kcal used by main meals</span>` : "";
+    return `<div class="page-intro"><div><span class="eyebrow">Daily diary</span><h1>${formatDate(date, true)}</h1></div><div class="datebar"><button class="icon-btn" data-action="date" data-days="-1" aria-label="Previous day">${icon("ChevronLeft")}</button><button class="today-btn" data-action="today">Today</button><button class="icon-btn" data-action="date" data-days="1" aria-label="Next day">${icon("ChevronRight")}</button></div></div><section class="card summary"><div class="summary-top"><div><div class="summary-label">Calories logged</div><div class="guide"><span class="big">${fmt(totals.calories)}</span><span>${guide ? `of ${fmt(guide)} kcal` : "kcal"}</span></div></div><div class="summary-actions"><button class="btn btn-icon" data-action="open-quick">${icon("Gauge")}<span>Quick Add</span></button><button class="btn-primary btn-icon" data-action="choose-food">${icon("Plus")}<span>Add food</span></button></div></div><div class="calorie-scale" aria-label="${fmt(pct)} percent of calorie guide"><div class="scale-track"><div class="scale-sections">${segmentLabels}</div><div class="scale-fill" style="width:${pct}%"></div>${overrun}<span class="scale-flame" style="left:${pct}%">${icon("Flame")}</span></div><div class="scale-labels">${segmentLabels}</div></div><div class="summary-note">${remaining == null ? "Add your baseline to create a daily guide." : `<strong>${fmt(remaining)}</strong> kcal remaining today${budgetWarning}`}</div><div class="macros">${this.macroColumn("protein", totals.proteinG, targets?.proteinG)}${this.macroColumn("carbs", totals.carbsG, targets?.carbsG)}${this.macroColumn("fat", totals.fatG, targets?.fatG)}${this.macroColumn("fiber", totals.fiberG, targets?.fiberG)}</div></section><div class="section-heading"><span>Meals</span><span>${this.state.entries.filter((entry) => entry.date === date).length} entries</span></div>${meals}`;
+  }
+
+  /** The wide macro column: an icon, the gram figure, and its target. The phone dashboard uses the compact `macro` bar instead. */
+  private macroColumn(label: string, value: number | null, target?: number): string {
+    const pct = target && value != null ? Math.min(100, value / target * 100) : 0;
+    const glyph: Record<string, Parameters<typeof icon>[0]> = { protein: "Dumbbell", carbs: "Wheat", fat: "Droplets", fiber: "Leaf" };
+    return `<div class="macro ${label}"><span class="macro-icon">${icon(glyph[label] ?? "Gauge")}</span><div class="macro-content"><div class="k">${label}</div><div class="v">${fmt(value, 1)} <small>g</small></div>${target ? `<div class="macro-target">of ${fmt(target)} g</div>` : ""}<div class="macroline"><div style="width:${pct}%"></div></div></div></div>`;
+  }
+
+  /** A wide-layout meal card that lists its entries inline; the protected-snack control stays in Settings. */
+  private mealGroup(period: Period, date: string): string {
+    const entries = this.state.entries.filter((entry) => entry.date === date && entry.period === period);
+    const total = totalsFor(this.state, date, period);
+    const glyph: Record<Period, Parameters<typeof icon>[0]> = { breakfast: "Coffee", lunch: "Sun", dinner: "Moon", snacks: "Apple" };
+    return `<section class="mealgroup card ${entries.length ? "has-entries" : ""}" data-period="${period}"><div class="mealhead"><div class="mealidentity"><span class="meal-period-icon ${period}">${icon(glyph[period])}</span><div><div class="meal-label">Meal</div><div class="mealname">${period}</div><div class="mealsum">${fmt(total.calories)} kcal · ${fmt(total.proteinG, 1)}p · ${fmt(total.carbsG, 1)}c · ${fmt(total.fatG, 1)}f</div></div></div><button class="icon-btn subtle" data-action="choose-food" data-period="${period}" aria-label="Add ${period}">${icon("Plus")}</button></div><div class="entrylist">${entries.map((entry) => this.entryHtml(entry)).join("")}</div></section>`;
   }
 
   private macro(label: string, value: number | null, target?: number): string {
