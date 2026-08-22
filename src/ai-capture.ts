@@ -174,6 +174,25 @@ const readNullableString = (value: unknown, field: string): string | null => {
 };
 
 /**
+ * Read the amount eaten now, recovering rather than refusing when it is absent or unusable.
+ *
+ * Unlike a name or a calorie count, a missing portion is not missing information: the reply
+ * still describes a food completely, and one canonical serving is the honest reading of a
+ * quantity nobody stated. Refusing here cost the user the whole capture — and its allowance
+ * charge — over a field the model was merely asked to include, so a reply from a model that
+ * never saw the portion instruction still fills the form.
+ *
+ * A unit that disagrees with serving.unit is treated as a labelling slip, not a different
+ * measurement: the amount is kept and the canonical unit adopted, because the two are
+ * required to match and the user reviews every figure before saving.
+ */
+const readPortion = (value: unknown, servingAmount: number, servingUnit: string): { amount: number; unit: string } => {
+  const source = isRecord(value) ? value as Record<string, unknown> : {};
+  const amount = typeof source.amount === "number" && Number.isFinite(source.amount) && source.amount > 0 ? source.amount : servingAmount;
+  return { amount, unit: servingUnit };
+};
+
+/**
  * Validate a decoded model reply against the same contract the request declared.
  * Structured output makes conformance overwhelmingly likely, not guaranteed — a truncated
  * or safety-filtered generation still has to be refused rather than half-applied.
@@ -191,12 +210,7 @@ export const validateCapturePayload = (value: unknown): CapturedFood => {
   if (amount <= 0) fail("serving.amount must be greater than zero.");
   if (typeof serving.unit !== "string" || serving.unit.trim().length === 0) fail("serving.unit must be a non-empty string.");
 
-  if (!isRecord(record.portion)) fail("The reply is missing portion information.");
-  const portion = record.portion as Record<string, unknown>;
-  const portionAmount = readNumber(portion.amount, "portion.amount");
-  if (portionAmount <= 0) fail("portion.amount must be greater than zero.");
-  if (typeof portion.unit !== "string" || portion.unit.trim().length === 0) fail("portion.unit must be a non-empty string.");
-  if (portion.unit.trim() !== serving.unit.trim()) fail("portion.unit must match serving.unit.");
+  const portion = readPortion(record.portion, amount, (serving.unit as string).trim());
 
   if (!isRecord(record.nutrition)) fail("The reply is missing nutrition information.");
   const source = record.nutrition as Record<string, unknown>;
@@ -214,7 +228,7 @@ export const validateCapturePayload = (value: unknown): CapturedFood => {
     name: name.trim(),
     brand: readNullableString(record.brand, "brand"),
     serving: { amount, unit: (serving.unit as string).trim(), description: typeof serving.description === "string" ? serving.description : "" },
-    portion: { amount: portionAmount, unit: (portion.unit as string).trim() },
+    portion,
     nutrition,
     sourceType,
     confidence,

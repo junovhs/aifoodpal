@@ -163,11 +163,20 @@ describe("validateCapturePayload", () => {
     ["a missing name", { ...labelPayload, name: "  " }],
     ["a non-numeric calorie count", { ...labelPayload, nutrition: { ...labelPayload.nutrition, calories: "100" } }],
     ["a zero serving amount", { ...labelPayload, serving: { ...labelPayload.serving, amount: 0 } }],
-    ["a zero portion amount", { ...labelPayload, portion: { ...labelPayload.portion, amount: 0 } }],
-    ["an incompatible portion unit", { ...labelPayload, portion: { amount: 1, unit: "container" } }],
     ["a non-object reply", ["not", "a", "food"]],
   ])("refuses %s rather than half-applying it", (_label, payload) => {
     expect(() => validateCapturePayload(payload)).toThrowError(expect.objectContaining({ name: "CaptureContractError", code: "invalid-shape" }));
+  });
+
+  it.each([
+    ["an absent portion", { ...labelPayload, portion: undefined }],
+    ["a zero portion amount", { ...labelPayload, portion: { ...labelPayload.portion, amount: 0 } }],
+  ])("falls back to one canonical serving for %s", (_label, payload) => {
+    expect(validateCapturePayload(payload).portion).toEqual({ amount: 170, unit: "g" });
+  });
+
+  it("adopts the canonical unit when the reply labels the portion differently", () => {
+    expect(validateCapturePayload({ ...labelPayload, portion: { amount: 85, unit: "grams" } }).portion).toEqual({ amount: 85, unit: "g" });
   });
 
   it("reports unparseable text distinctly from a bad shape", () => {

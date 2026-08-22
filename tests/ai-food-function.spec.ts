@@ -118,7 +118,7 @@ describe("ai-food request handling", () => {
     expect((result.body as { error: string }).error).toContain("nutrition");
   });
 
-  it("refuses a portion that cannot map to the canonical serving", async () => {
+  it("recovers a portion that cannot map to the canonical serving rather than losing the capture", async () => {
     const incompatibleReply = JSON.stringify({
       ...JSON.parse(modelReply),
       portion: { amount: 1, unit: "container" },
@@ -127,9 +127,8 @@ describe("ai-food request handling", () => {
 
     const result = await handleAiFood(request(), dependencies);
 
-    expect(result.status).toBe(502);
-    expect(result.body).toMatchObject({ ok: false, code: "ai-invalid" });
-    expect((result.body as { error: string }).error).toContain("portion.unit must match serving.unit");
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ ok: true, food: { portion: { amount: 1, unit: "g" } } });
   });
 
   it("refuses unparseable text from the AI", async () => {
