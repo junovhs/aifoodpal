@@ -118,6 +118,44 @@ describe("ai-food request handling", () => {
     expect((result.body as { error: string }).error).toContain("nutrition");
   });
 
+  it("reads a describe request that carries no photo at all", async () => {
+    const dependencies = deps();
+
+    const result = await handleAiFood({ mode: "describe", note: "1 BBQ pork bao and 2 veggie bao, about 800 calories" }, dependencies);
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ ok: true, food: { name: "Greek yogurt" } });
+    const sent = dependencies.generate.mock.calls[0]![0] as { imageBase64: string | null; mimeType: string | null; prompt: string };
+    expect(sent.imageBase64).toBeNull();
+    expect(sent.mimeType).toBeNull();
+    expect(sent.prompt).toContain("There is no photo");
+  });
+
+  it("charges a describe against the estimate ledger kind the database already accepts", async () => {
+    const dependencies = deps();
+
+    await handleAiFood({ mode: "describe", note: "two eggs" }, dependencies);
+
+    expect(dependencies.consumeCredit).toHaveBeenCalledWith("estimate");
+  });
+
+  it("refuses a describe with nothing written and never charges for it", async () => {
+    const dependencies = deps();
+
+    const result = await handleAiFood({ mode: "describe", note: "   " }, dependencies);
+
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ ok: false, code: "bad-request" });
+    expect(dependencies.consumeCredit).not.toHaveBeenCalled();
+  });
+
+  it("still requires a photo for a label request", async () => {
+    const result = await handleAiFood({ mode: "label", note: "no photo attached" }, deps());
+
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ ok: false, code: "bad-request" });
+  });
+
   it("recovers a portion that cannot map to the canonical serving rather than losing the capture", async () => {
     const incompatibleReply = JSON.stringify({
       ...JSON.parse(modelReply),

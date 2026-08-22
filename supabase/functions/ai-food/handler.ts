@@ -1,6 +1,7 @@
 import {
   CAPTURE_MODES,
   CAPTURE_RESPONSE_SCHEMA,
+  CREDIT_KIND_FOR_MODE,
   CaptureContractError,
   MODEL_FOR_MODE,
   NOTE_MAX_CHARS,
@@ -33,11 +34,11 @@ export interface AiCreditGrant {
   remaining_month: number;
 }
 
-/** What the browser posts to /functions/v1/ai-food. */
+/** What the browser posts to /functions/v1/ai-food. A describe request carries no photo. */
 export interface AiFoodRequest {
   mode: CaptureMode;
-  imageBase64: string;
-  mimeType: string;
+  imageBase64?: string | null;
+  mimeType?: string | null;
   note?: string | null;
 }
 
@@ -65,8 +66,9 @@ export interface AiFoodResponse {
 export interface GenerateRequest {
   model: string;
   prompt: string;
-  imageBase64: string;
-  mimeType: string;
+  /** Absent for a describe request, which is text alone. */
+  imageBase64: string | null;
+  mimeType: string | null;
   schema: unknown;
 }
 
@@ -76,8 +78,8 @@ export interface GenerateRequest {
  */
 export interface AiFoodDeps {
   apiKey: string | null;
-  /** Charges the caller's allowance; rejects with `{ code: "PT429" }` when a cap is hit. */
-  consumeCredit: (mode: CaptureMode) => Promise<AiCreditGrant>;
+  /** Charges the caller's allowance against the mode's ledger kind; rejects with `{ code: "PT429" }` when a cap is hit. */
+  consumeCredit: (kind: "label" | "estimate") => Promise<AiCreditGrant>;
   /** Returns the model's raw JSON text. */
   generate: (request: GenerateRequest) => Promise<string>;
 }
@@ -114,22 +116,35 @@ export const handleAiFood = async (payload: unknown, deps: AiFoodDeps): Promise<
   if (typeof mode !== "string" || !CAPTURE_MODES.includes(mode as CaptureMode)) {
     return errorBody(400, "bad-request", "Choose either label or estimate.");
   }
-  if (typeof mimeType !== "string" || !ALLOWED_MIME_TYPES.includes(mimeType)) {
-    return errorBody(400, "bad-request", "Send a JPEG, PNG, or WebP photo.");
-  }
-  if (typeof imageBase64 !== "string" || imageBase64.length === 0) {
-    return errorBody(400, "bad-request", "Send a photo with the request.");
-  }
-  if (base64Bytes(imageBase64) > MAX_IMAGE_BYTES) {
-    return errorBody(413, "bad-request", "That photo is too large. Take it again from the app so it is resized.");
-  }
   if (note != null && (typeof note !== "string" || note.length > NOTE_MAX_CHARS)) {
     return errorBody(400, "bad-request", `Keep the note under ${NOTE_MAX_CHARS} characters.`);
   }
 
+  // A describe request is the note alone: there is no photo to size or type-check, and the
+  // note stops being optional context and becomes the only evidence the model gets.
+  const describing = mode === "describe";
+  if (describing) {
+    if (typeof note !== "string" || note.trim().length === 0) {
+      return errorBody(400, "bad-request", "Describe what you ate before sending it.");
+    }
+    if (typeof imageBase64 === "string" && imageBase64.length > 0) {
+      return errorBody(400, "bad-request", "Choose a photo mode to send a photo.");
+    }
+  } else {
+    if (typeof mimeType !== "string" || !ALLOWED_MIME_TYPES.includes(mimeType)) {
+      return errorBody(400, "bad-request", "Send a JPEG, PNG, or WebP photo.");
+    }
+    if (typeof imageBase64 !== "string" || imageBase64.length === 0) {
+      return errorBody(400, "bad-request", "Send a photo with the request.");
+    }
+    if (base64Bytes(imageBase64) > MAX_IMAGE_BYTES) {
+      return errorBody(413, "bad-request", "That photo is too large. Take it again from the app so it is resized.");
+    }
+  }
+
   let grant: AiCreditGrant;
   try {
-    grant = await deps.consumeCredit(mode as CaptureMode);
+    grant = await deps.consumeCredit(CREDIT_KIND_FOR_MODE[mode as CaptureMode]);
   } catch (error) {
     if (errorCode(error) === "PT429") {
       return errorBody(429, "limit-reached", error instanceof Error ? error.message : "You have used up your AI capture allowance.");
@@ -142,8 +157,8 @@ export const handleAiFood = async (payload: unknown, deps: AiFoodDeps): Promise<
     raw = await deps.generate({
       model: MODEL_FOR_MODE[mode as CaptureMode],
       prompt: buildCapturePrompt(mode as CaptureMode, note ?? null),
-      imageBase64,
-      mimeType,
+      imageBase64: describing ? null : imageBase64 as string,
+      mimeType: describing ? null : mimeType as string,
       schema: CAPTURE_RESPONSE_SCHEMA,
     });
   } catch (error) {

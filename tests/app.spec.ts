@@ -164,10 +164,34 @@ describe("food photo capture", () => {
     input.dispatchEvent(new Event("change", { bubbles: true }));
   };
 
+  it("sends a written description with no photo and fills the form from the reply", async () => {
+    const capture = deps();
+    const root = openEditor(capture);
+
+    root.querySelector<HTMLTextAreaElement>("#ai-food-note")!.value = "1 BBQ pork bao and 2 veggie bao, about 800 calories";
+    root.querySelector<HTMLElement>('[data-action="describe"]')!.click();
+
+    await vi.waitFor(() => expect(root.querySelector<HTMLInputElement>('input[name="name"]')?.value).toBe("Greek yogurt"));
+    expect(capture.send).toHaveBeenCalledWith({ mode: "describe", note: "1 BBQ pork bao and 2 veggie bao, about 800 calories" });
+    expect(capture.prepare).not.toHaveBeenCalled();
+    expect(capture.scan).not.toHaveBeenCalled();
+    expect(root.querySelector(".ai-assist")?.textContent).toContain("Filled in from your description");
+  });
+
+  it("refuses an empty description without spending a capture", () => {
+    const capture = deps();
+    const root = openEditor(capture);
+
+    root.querySelector<HTMLElement>('[data-action="describe"]')!.click();
+
+    expect(capture.send).not.toHaveBeenCalled();
+    expect(root.querySelector(".notice.warn")?.textContent).toContain("Describe what you ate first");
+  });
+
   it("offers a camera path and no clipboard controls", () => {
     const root = openEditor(deps());
 
-    expect(root.querySelector(".ai-assist")?.textContent).toContain("Add it from a photo");
+    expect(root.querySelector(".ai-assist")?.textContent).toContain("Add it without typing");
     expect(root.querySelector<HTMLElement>('[data-action="capture"][data-mode="label"]')?.textContent).toContain("Scan a package");
     expect(root.querySelector<HTMLElement>('[data-action="capture"][data-mode="estimate"]')?.textContent).toContain("Estimate this plate");
     expect(root.querySelector('[data-action="ask-food-ai"]')).toBeNull();

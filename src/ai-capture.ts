@@ -25,13 +25,17 @@ export interface CapturedFood {
 }
 
 /**
- * How a photo should be read. `label` transcribes a printed nutrition panel; `estimate`
- * judges a plate of food. They differ in prompt and model, never in request shape.
+ * How a capture should be read. `label` transcribes a printed nutrition panel; `estimate`
+ * judges a plate of food; `describe` reads a written description with no photo at all.
+ * The first two differ only in prompt and model; `describe` also sends no image.
  */
-export type CaptureMode = "label" | "estimate";
+export type CaptureMode = "label" | "estimate" | "describe";
 
 /** Every mode, for validating an incoming request and for iterating the capture buttons. */
-export const CAPTURE_MODES: readonly CaptureMode[] = ["label", "estimate"];
+export const CAPTURE_MODES: readonly CaptureMode[] = ["label", "estimate", "describe"];
+
+/** The modes that carry a photo. `describe` is the one that does not. */
+export const PHOTO_MODES: readonly CaptureMode[] = ["label", "estimate"];
 
 /**
  * OpenRouter model slugs. Transcription is nearly mechanical, so it runs on the cheap model;
@@ -42,6 +46,21 @@ export const CAPTURE_MODES: readonly CaptureMode[] = ["label", "estimate"];
 export const MODEL_FOR_MODE: Record<CaptureMode, string> = {
   label: "google/gemini-2.5-flash-lite",
   estimate: "google/gemini-2.5-flash",
+  describe: "google/gemini-2.5-flash",
+};
+
+/**
+ * Which ai_usage row a mode is charged against.
+ *
+ * `describe` runs the same model as `estimate` at a smaller prompt, so it costs no more and
+ * belongs in the same bucket. Keeping the ledger's kind at two values also means this mode
+ * needs no migration: `consume_ai_credit` check-constrains kind to ('label', 'estimate'),
+ * and a third value would be refused by a database the deploy has not caught up with.
+ */
+export const CREDIT_KIND_FOR_MODE: Record<CaptureMode, "label" | "estimate"> = {
+  label: "label",
+  estimate: "estimate",
+  describe: "estimate",
 };
 
 /** Long enough for real context ("it's lamb, not beef, and it was fatty"), short enough to bound cost. */
@@ -296,18 +315,37 @@ const ESTIMATE_RULES = `This photo is prepared food, not a label. Estimate its n
 - Describe the canonical serving in serving.description, so the library unit can be checked.
 - Set sourceType to "estimate" or "restaurant". Set confidence honestly; "low" is the right answer for an ambiguous plate.`;
 
+const DESCRIBE_RULES = `There is no photo. The user's description below is the only evidence you have.
+
+- Work only from what the description says. Never invent a food, a brand, or an ingredient it does not mention.
+- When the description already states figures — calories, macros, a per-item breakdown — use those figures rather than your own estimate of the same food.
+- When it describes several items as one meal, return them as one food named after the meal, with nutrition covering the whole of it.
+- Set serving to a clean reusable unit and put the amount described in portion, exactly as the plate rules do.
+- Estimate every core macro. Do not return null for calories, protein, carbs, fat, or fiber merely because the figure is an estimate.
+- Say in notes which figures came from the description and which you estimated.
+- Set sourceType to "user" when the description supplied the numbers, otherwise "estimate". Set confidence honestly.`;
+
+const RULES_FOR_MODE: Record<CaptureMode, string> = {
+  label: LABEL_RULES,
+  estimate: ESTIMATE_RULES,
+  describe: DESCRIBE_RULES,
+};
+
 /**
- * Build the instruction half of a capture request. The photo and the response schema are
- * attached by the caller; this text never contains the user's food library or profile.
+ * Build the instruction half of a capture request. The photo (when there is one) and the
+ * response schema are attached by the caller; this text never contains the user's food
+ * library or profile.
  */
 export const buildCapturePrompt = (mode: CaptureMode, note?: string | null): string => {
   const trimmed = (note ?? "").trim().slice(0, NOTE_MAX_CHARS);
   const context = trimmed.length > 0
-    ? `The user added this context. Treat it as authoritative — it overrides what the photo appears to show:\n"""\n${trimmed}\n"""`
+    ? mode === "describe"
+      ? `This is the user's description of what they ate:\n"""\n${trimmed}\n"""`
+      : `The user added this context. Treat it as authoritative — it overrides what the photo appears to show:\n"""\n${trimmed}\n"""`
     : "The user added no extra context.";
   return `You are filling in a single food entry for AIfoodpal, a private food tracker. Return only data conforming to the provided schema.
 
-${mode === "label" ? LABEL_RULES : ESTIMATE_RULES}
+${RULES_FOR_MODE[mode]}
 
 ${SHARED_RULES}
 

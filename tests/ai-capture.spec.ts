@@ -3,6 +3,8 @@ import {
   CAPTURE_RESPONSE_FORMAT,
   CAPTURE_RESPONSE_SCHEMA,
   CORE_MACROS,
+  CREDIT_KIND_FOR_MODE,
+  PHOTO_MODES,
   MODEL_FOR_MODE,
   NOTE_MAX_CHARS,
   buildCapturePrompt,
@@ -177,6 +179,22 @@ describe("validateCapturePayload", () => {
 
   it("adopts the canonical unit when the reply labels the portion differently", () => {
     expect(validateCapturePayload({ ...labelPayload, portion: { amount: 85, unit: "grams" } }).portion).toEqual({ amount: 85, unit: "g" });
+  });
+
+  it("builds a describe prompt that works from the written description alone", () => {
+    const prompt = buildCapturePrompt("describe", "1 BBQ pork bao and 2 veggie bao, about 800 calories");
+
+    expect(prompt).toContain("There is no photo");
+    expect(prompt).toContain("Never invent a food");
+    expect(prompt).toContain("1 BBQ pork bao");
+    expect(prompt).not.toContain("it overrides what the photo appears to show");
+    expect(buildCapturePrompt("label")).not.toContain("There is no photo");
+  });
+
+  it("charges describe against the estimate ledger kind and runs it on the stronger model", () => {
+    expect(CREDIT_KIND_FOR_MODE.describe).toBe("estimate");
+    expect(MODEL_FOR_MODE.describe).toBe(MODEL_FOR_MODE.estimate);
+    expect(PHOTO_MODES).not.toContain("describe");
   });
 
   it("reports unparseable text distinctly from a bad shape", () => {

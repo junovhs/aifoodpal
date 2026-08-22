@@ -23,11 +23,11 @@ export class CaptureError extends Error {
   }
 }
 
-/** What the browser sends to the ai-food function. */
+/** What the browser sends to the ai-food function. A describe request carries no photo. */
 export interface CaptureRequest {
   mode: CaptureMode;
-  imageBase64: string;
-  mimeType: string;
+  imageBase64?: string;
+  mimeType?: string;
   note: string | null;
 }
 

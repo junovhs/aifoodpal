@@ -43,10 +43,14 @@ const generate = async (apiKey: string, request: GenerateRequest): Promise<strin
       model: request.model,
       messages: [{
         role: "user",
-        content: [
-          { type: "text", text: request.prompt },
-          { type: "image_url", image_url: { url: `data:${request.mimeType};base64,${request.imageBase64}` } },
-        ],
+        // A describe request carries no image part at all — an empty data URI would be an
+        // upload failure to the provider, not an absent photo.
+        content: request.imageBase64
+          ? [
+            { type: "text", text: request.prompt },
+            { type: "image_url", image_url: { url: `data:${request.mimeType};base64,${request.imageBase64}` } },
+          ]
+          : [{ type: "text", text: request.prompt }],
       }],
       response_format: CAPTURE_RESPONSE_FORMAT,
       temperature: 0,
@@ -111,8 +115,8 @@ Deno.serve(async (request: Request): Promise<Response> => {
   try {
     const result = await handleAiFood(payload, {
       apiKey,
-      consumeCredit: async (mode): Promise<AiCreditGrant> => {
-        const { data, error } = await supabase.rpc("consume_ai_credit", { capture_kind: mode });
+      consumeCredit: async (kind): Promise<AiCreditGrant> => {
+        const { data, error } = await supabase.rpc("consume_ai_credit", { capture_kind: kind });
         if (error) throw error;
         return data as AiCreditGrant;
       },
