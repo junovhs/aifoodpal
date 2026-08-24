@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { applyAiResponse, buildAiPrompt, buildFoodAiPrompt, importFoodDraft, parseAiResponse } from "../src/ai";
 import { createEntry, createQuickCalorieEntry, createState, moveDiaryEntry, normalizeFood, protectedSnackBudget, removeFoodFromLibrary, type AppState } from "../src/model";
-import { calorieGuidance, nutritionTargets, totalsFor } from "../src/nutrition";
+import { calorieGuidance, calorieTrend, exerciseCalories, nutritionTargets, totalsFor, weightProjection } from "../src/nutrition";
 import { exportBackup, parseBackup } from "../src/storage";
 import { calendarGrid, formatMonth, shiftMonth } from "../src/calendar";
 import { createComboFood } from "../src/combos";
@@ -58,6 +58,30 @@ describe("nutrition domain", () => {
     expect(targets?.proteinG).toBeGreaterThan(0);
     expect(targets?.carbsG).toBeGreaterThan(0);
     expect(targets?.fatG).toBeGreaterThan(0);
+  });
+
+  it("calculates active-day averages and an exercise-aware weight projection", () => {
+    const state = readyState();
+    for (let day = 17; day <= 23; day += 1) state.entries.push(createQuickCalorieEntry(1700, `2026-08-${day}`, "dinner"));
+    state.exercises.push({ id: "exercise-1", date: "2026-08-22", kind: "strength", minutes: 20, createdAt: "2026-08-22T12:00:00Z", updatedAt: "2026-08-22T12:00:00Z" });
+
+    const trend = calorieTrend(state, "2026-08-23");
+    const projection = weightProjection(state, "2026-08-23");
+
+    expect(trend.week).toMatchObject({ average: 1700, activeDays: 7, calories: 11900 });
+    expect(trend.month.average).toBe(1700);
+    expect(exerciseCalories("strength", 20, 180)).toBeGreaterThan(50);
+    expect(projection).toMatchObject({ averageIntake: 1700, activeDays: 7, spanDays: 7 });
+    expect(projection?.averageExercise).toBeGreaterThan(5);
+    expect(projection?.weeklyChangeLb).toBeGreaterThan(0);
+    expect(projection?.oneMonthWeightLb).toBeLessThan(180);
+    expect(projection?.goalDate).not.toBeNull();
+  });
+
+  it("excludes unlogged days from active-day calorie averages", () => {
+    const state = readyState();
+    state.entries.push(createQuickCalorieEntry(1200, "2026-08-20", "dinner"), createQuickCalorieEntry(1800, "2026-08-23", "dinner"));
+    expect(calorieTrend(state, "2026-08-23").week).toMatchObject({ average: 1500, activeDays: 2 });
   });
 
   it("multiplies snapshot nutrition without changing the library food", () => {
@@ -150,7 +174,8 @@ describe("portable storage", () => {
       protectedSnackBudgetEnabled: false,
       protectedSnackCalories: 200,
     });
-    expect(parseBackup(JSON.stringify(legacy)).schemaVersion).toBe(2);
+    expect(parseBackup(JSON.stringify(legacy)).schemaVersion).toBe(3);
+    expect(parseBackup(JSON.stringify(legacy)).exercises).toEqual([]);
   });
   it("round-trips an exported backup and preserves null nutrients", () => {
     const state = readyState();

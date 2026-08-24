@@ -1,6 +1,6 @@
 import { formatQuantity, normalizeUnit, servingMultiplier, splitTrailingQuantity } from "./units";
 
-export const SCHEMA_VERSION = 2 as const;
+export const SCHEMA_VERSION = 3 as const;
 export const PERIODS = ["breakfast", "lunch", "dinner", "snacks"] as const;
 
 export type Period = (typeof PERIODS)[number];
@@ -88,6 +88,17 @@ export interface Weight {
   updatedAt: string;
 }
 
+export type ExerciseKind = "strength" | "walkEasy" | "walkBrisk" | "workoutHard";
+
+export interface Exercise {
+  id: string;
+  date: string;
+  kind: ExerciseKind;
+  minutes: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface NutritionTargets {
   proteinG: number;
   carbsG: number;
@@ -121,6 +132,7 @@ export interface AppState {
   foods: Food[];
   entries: Entry[];
   weights: Weight[];
+  exercises: Exercise[];
   prefs: {
     date: string;
     protectedSnackBudgetEnabled: boolean;
@@ -368,6 +380,7 @@ export const createState = (date = isoDate()): AppState => {
     foods: [],
     entries: [],
     weights: [],
+    exercises: [],
     prefs: { date, protectedSnackBudgetEnabled: false, protectedSnackCalories: 200 },
   };
 };

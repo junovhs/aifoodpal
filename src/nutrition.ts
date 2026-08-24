@@ -1,4 +1,4 @@
-import { emptyNutrition, isoDate, type AppState, type Entry, type Nutrition, type NutritionTargets, type Profile } from "./model";
+import { emptyNutrition, isoDate, type AppState, type Entry, type ExerciseKind, type Nutrition, type NutritionTargets, type Profile } from "./model";
 
 export const FDA_DAILY_VALUES = { saturatedFatG: 20, sodiumMg: 2300, addedSugarG: 50, fiberG: 28 } as const;
 export const CALORIE_FLOOR = 1000;
@@ -157,4 +157,99 @@ export const totalsFor = (state: AppState, date: string, period?: Entry["period"
 export const latestWeight = (state: AppState): number | null => {
   const latest = [...state.weights].sort((left, right) => right.date.localeCompare(left.date))[0];
   return latest?.weightLb ?? state.profile.weightLb;
+};
+
+export interface CalorieAverage {
+  average: number | null;
+  activeDays: number;
+  calories: number;
+}
+
+export interface CalorieTrend {
+  activeDayAverage: CalorieAverage;
+  week: CalorieAverage;
+  month: CalorieAverage;
+}
+
+const averageBetween = (dailyCalories: Map<string, number>, start: string | null, end: string): CalorieAverage => {
+  const values = [...dailyCalories]
+    .filter(([date]) => (!start || date >= start) && date <= end)
+    .map(([, calories]) => calories);
+  const calories = values.reduce((sum, value) => sum + value, 0);
+  return { average: values.length ? calories / values.length : null, activeDays: values.length, calories };
+};
+
+/** Active-day intake averages. Unlogged days are excluded instead of being treated as zero-calorie days. */
+export const calorieTrend = (state: AppState, anchor = isoDate()): CalorieTrend => {
+  const dailyCalories = new Map<string, number>();
+  for (const entry of state.entries) {
+    if (entry.date > anchor) continue;
+    dailyCalories.set(entry.date, (dailyCalories.get(entry.date) ?? 0) + entryNutrition(entry).calories);
+  }
+  return {
+    activeDayAverage: averageBetween(dailyCalories, null, anchor),
+    week: averageBetween(dailyCalories, shiftDate(anchor, -6), anchor),
+    month: averageBetween(dailyCalories, shiftDate(anchor, -29), anchor),
+  };
+};
+
+export const EXERCISE_MET: Record<ExerciseKind, number> = {
+  strength: 3.5,
+  walkEasy: 3,
+  walkBrisk: 4.3,
+  workoutHard: 6,
+};
+
+/** Estimated energy above rest. MET values are deliberately broad because pace and effort are not measured. */
+export const exerciseCalories = (kind: ExerciseKind, minutes: number, weightLb: number): number =>
+  Math.max(0, EXERCISE_MET[kind] - 1) * 3.5 * poundsToKg(weightLb) / 200 * Math.max(0, minutes);
+
+export interface WeightProjection {
+  averageIntake: number;
+  activeDays: number;
+  spanDays: number;
+  baselineMaintenance: number;
+  averageExercise: number;
+  dailyDeficit: number;
+  weeklyChangeLb: number;
+  oneMonthWeightLb: number;
+  goalDate: string | null;
+}
+
+/** Projects the logged trend; positive weeklyChangeLb means loss and negative means gain. */
+export const weightProjection = (state: AppState, anchor = isoDate()): WeightProjection | null => {
+  const current = latestWeight(state);
+  const resting = current == null ? null : restingMetabolicRate(state.profile, current);
+  const intake = calorieTrend(state, anchor).month;
+  if (!current || !resting || intake.average == null || intake.activeDays < 3) return null;
+
+  const recentDates = [...new Set(state.entries.map((entry) => entry.date))]
+    .filter((date) => date >= shiftDate(anchor, -29) && date <= anchor)
+    .sort();
+  const firstDate = recentDates[0] ?? anchor;
+  const spanDays = Math.max(1, Math.round((parseLocalDate(anchor).getTime() - parseLocalDate(firstDate).getTime()) / 86_400_000) + 1);
+  const exerciseTotal = state.exercises
+    .filter((entry) => entry.date >= firstDate && entry.date <= anchor)
+    .reduce((sum, entry) => sum + exerciseCalories(entry.kind, entry.minutes, current), 0);
+  const averageExercise = exerciseTotal / spanDays;
+  const baselineMaintenance = resting * state.profile.activityPAL;
+  const dailyDeficit = baselineMaintenance + averageExercise - intake.average;
+  const dailyChangeLb = -dailyDeficit / 3500;
+  const goal = state.profile.goalWeightLb;
+  let goalDate: string | null = null;
+  if (goal != null && Math.abs(goal - current) < 0.05) goalDate = anchor;
+  else if (goal != null && Math.abs(dailyChangeLb) > 0.0001 && (goal - current) * dailyChangeLb > 0) {
+    goalDate = shiftDate(anchor, Math.ceil(Math.abs((goal - current) / dailyChangeLb)));
+  }
+  return {
+    averageIntake: intake.average,
+    activeDays: intake.activeDays,
+    spanDays,
+    baselineMaintenance,
+    averageExercise,
+    dailyDeficit,
+    weeklyChangeLb: dailyDeficit * 7 / 3500,
+    oneMonthWeightLb: current + dailyChangeLb * 30,
+    goalDate,
+  };
 };

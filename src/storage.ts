@@ -17,7 +17,7 @@ export interface StateRepository {
 export const migrateState = (value: unknown): AppState => {
   if (!value || typeof value !== "object") throw new Error("Backup must be a JSON object.");
   const input = value as Omit<Partial<AppState>, "schemaVersion"> & { schemaVersion?: number; preferences?: AppState["prefs"] };
-  if (input.schemaVersion !== 1 && input.schemaVersion !== SCHEMA_VERSION) throw new Error("This backup uses an unsupported schema version.");
+  if (![1, 2, SCHEMA_VERSION].includes(input.schemaVersion ?? -1)) throw new Error("This backup uses an unsupported schema version.");
   const base = createState();
   const state: AppState = {
     ...base,
@@ -35,6 +35,7 @@ export const migrateState = (value: unknown): AppState => {
         }))
       : [],
     weights: Array.isArray(input.weights) ? input.weights : [],
+    exercises: Array.isArray(input.exercises) ? input.exercises : [],
   };
   backfillEntryNutrition(state);
   return state;

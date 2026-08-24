@@ -3,12 +3,56 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DaybookApp, type FoodCaptureDeps } from "../src/app";
 import { CaptureError } from "../src/capture-client";
-import { createEntry, createState, normalizeFood, type AppState } from "../src/model";
+import { createEntry, createQuickCalorieEntry, createState, isoDate, normalizeFood, type AppState } from "../src/model";
+import { shiftDate } from "../src/nutrition";
 import type { StateRepository } from "../src/storage";
 
 const openSettings = (root: HTMLElement): void => {
   root.querySelector<HTMLElement>('[data-action="view"][data-view="settings"]')!.click();
 };
+
+describe("calorie trends and exercise", () => {
+  it("shows recent averages and saves an exercise that contributes to the forecast", () => {
+    const today = isoDate();
+    const state = createState(today);
+    Object.assign(state.profile, { onboardingComplete: true, age: 35, sexForEquation: "female", heightIn: 66, weightLb: 180, goalWeightLb: 160, activityPAL: 1.2 });
+    for (let offset = -6; offset <= 0; offset += 1) state.entries.push(createQuickCalorieEntry(1700, shiftDate(today, offset), "dinner"));
+    const save = vi.fn<(state: AppState) => void>();
+    const root = document.createElement("main");
+    new DaybookApp(root, { load: () => state, save }).start();
+
+    root.querySelector<HTMLElement>('[data-action="view"][data-view="calendar"]')!.click();
+    expect(root.querySelector(".history-summary")?.textContent).toContain("avg kcal / active day");
+    expect(root.querySelector(".history-summary")?.textContent).toContain("7-day avg");
+    expect(root.querySelector(".history-summary")?.textContent).toContain("30-day avg");
+
+    root.querySelector<HTMLElement>('[data-action="view"][data-view="trend"]')!.click();
+    expect(root.querySelector(".forecast")?.textContent).toContain("In one month");
+    root.querySelector<HTMLElement>('[data-action="open-exercise"]')!.click();
+    const form = root.querySelector<HTMLFormElement>('form[data-form="exercise"]')!;
+    form.querySelector<HTMLSelectElement>('select[name="kind"]')!.value = "strength";
+    form.querySelector<HTMLInputElement>('input[name="minutes"]')!.value = "20";
+    form.requestSubmit();
+
+    expect(state.exercises).toHaveLength(1);
+    expect(state.exercises[0]).toMatchObject({ kind: "strength", minutes: 20, date: today });
+    expect(save).toHaveBeenCalled();
+    expect(root.querySelector(".exercise-row")?.textContent).toContain("Dumbbells / strength");
+  });
+
+  it("uses plain-language baseline activity choices in Settings", () => {
+    const state = createState();
+    Object.assign(state.profile, { onboardingComplete: true, activityPAL: 1.6 });
+    const root = document.createElement("main");
+    new DaybookApp(root, { load: () => state, save: vi.fn() }).start();
+    openSettings(root);
+
+    const activity = root.querySelector<HTMLSelectElement>('select[name="activityPAL"]')!;
+    expect(activity.selectedOptions[0]?.textContent).toContain("Moderately active");
+    expect(activity.closest("label")?.textContent).toContain("before workouts");
+    expect(activity.closest("label")?.textContent).toContain("not counted twice");
+  });
+});
 
 describe("protected snack budget", () => {
   it("flags main-meal encroachment while keeping the control in Settings", () => {
