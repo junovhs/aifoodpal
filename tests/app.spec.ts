@@ -4,8 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { DaybookApp, type FoodCaptureDeps } from "../src/app";
 import { CaptureError } from "../src/capture-client";
 import { createEntry, createQuickCalorieEntry, createState, isoDate, normalizeFood, type AppState } from "../src/model";
-import { calorieGuidance, formatDate, goalDateFromPace, shiftDate, weightProjection } from "../src/nutrition";
-import type { StateRepository } from "../src/storage";
+import { calorieGuidance, formatDate, goalDateFromPace, maintenanceCalories, paceFromDailyGuide, planProfile, shiftDate, weightProjection } from "../src/nutrition";
+import { migrateState, type StateRepository } from "../src/storage";
 
 const openSettings = (root: HTMLElement): void => {
   root.querySelector<HTMLElement>('[data-action="view"][data-view="settings"]')!.click();
@@ -30,13 +30,13 @@ describe("weight sourcing", () => {
     expect(ring).toContain("28%");
     expect(root.querySelector(".goal-band")?.textContent).toContain("36");
 
-    // The Settings estimate must be computed from the check-in weight, not the stale 240.
+    // The Settings guide must be computed from the check-in weight, not the stale 240.
     openSettings(root);
-    const notice = root.querySelector(".notice")?.textContent ?? "";
+    const shown = root.querySelector<HTMLInputElement>('input[name="dailyGuide"]')!.value;
     const fromCheckIn = calorieGuidance({ ...state.profile, weightLb: 196 }).target!;
     const fromOnboarding = calorieGuidance({ ...state.profile, weightLb: 240 }).target!;
     expect(Math.round(fromCheckIn)).not.toBe(Math.round(fromOnboarding));
-    expect(notice.replace(/,/g, "")).toContain(String(Math.round(fromCheckIn)));
+    expect(shown).toBe(String(Math.round(fromCheckIn)));
   });
 
   it("keeps goal progress steady when the oldest check-in is deleted", () => {
@@ -59,6 +59,114 @@ describe("weight sourcing", () => {
     root.querySelector<HTMLElement>('[data-action="request-delete-weight"][data-id="w1"]')!.click();
     root.querySelector<HTMLElement>('[data-action="confirm-delete-weight"]')!.click();
     expect(root.querySelector(".goal-ring")?.textContent).toBe(before);
+  });
+});
+
+const planState = (over: Partial<AppState["profile"]> = {}) => {
+  const today = isoDate();
+  const state = createState(today);
+  Object.assign(state.profile, {
+    onboardingComplete: true, age: 35, sexForEquation: "female", heightIn: 66,
+    weightLb: 196, startWeightLb: 210, goalWeightLb: 160, activityPAL: 1.6,
+    goalType: "lose", rateLbWeek: 1.5, ...over,
+  });
+  state.weights.push({ id: "w1", date: shiftDate(today, -2), weightLb: 196, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+  // A complete week of logs, so the Progress forecast KPIs render.
+  for (let offset = -7; offset <= -1; offset += 1) state.entries.push(createQuickCalorieEntry(1845, shiftDate(today, offset), "dinner"));
+  return state;
+};
+
+const savePlan = (root: HTMLElement, values: Record<string, string>): void => {
+  const form = root.querySelector<HTMLFormElement>('form[data-form="settings"]')!;
+  for (const [name, value] of Object.entries(values)) form.querySelector<HTMLInputElement>(`[name="${name}"]`)!.value = value;
+  form.requestSubmit();
+};
+
+describe("one plan intent", () => {
+  it("turns a typed calorie guide into the pace it implies and moves the plan date", () => {
+    const state = planState();
+    const root = document.createElement("main");
+    new DaybookApp(root, { load: () => state, save: vi.fn() }).start();
+    root.querySelector<HTMLElement>('[data-action="view"][data-view="trend"]')!.click();
+    const dateBefore = root.querySelector(".forecast-kpi.date b")?.textContent;
+
+    openSettings(root);
+    savePlan(root, { dailyGuide: "1600" });
+
+    const implied = paceFromDailyGuide(planProfile(state), 1600)!;
+    expect(implied).not.toBeCloseTo(1.5, 2);
+    expect(state.profile.rateLbWeek).toBeCloseTo(implied, 6);
+    // The guide is never kept as a second number that could contradict the pace.
+    expect(state.profile.manualDailyGuide).toBeNull();
+    // Reopening shows exactly what was typed, so the round trip loses nothing.
+    openSettings(root);
+    expect(root.querySelector<HTMLInputElement>('input[name="dailyGuide"]')!.value).toBe("1600");
+
+    root.querySelector<HTMLElement>('[data-action="view"][data-view="trend"]')!.click();
+    const dateAfter = root.querySelector(".forecast-kpi.date b")?.textContent;
+    expect(dateAfter).not.toBe(dateBefore);
+    expect(dateAfter).toBe(formatDate(goalDateFromPace(196, 160, state.profile.rateLbWeek)!));
+  });
+
+  it("turns a typed pace into the calorie guide it requires", () => {
+    const state = planState({ rateLbWeek: 1 });
+    const root = document.createElement("main");
+    new DaybookApp(root, { load: () => state, save: vi.fn() }).start();
+    openSettings(root);
+    const guideBefore = Number(root.querySelector<HTMLInputElement>('input[name="dailyGuide"]')!.value);
+
+    savePlan(root, { rateLbWeek: "1.5" });
+
+    expect(state.profile.rateLbWeek).toBe(1.5);
+    expect(state.profile.manualDailyGuide).toBeNull();
+    openSettings(root);
+    const guideAfter = Number(root.querySelector<HTMLInputElement>('input[name="dailyGuide"]')!.value);
+    // A faster pace must cost calories, by exactly the 500 kcal/day per lb/week it is defined as.
+    expect(guideAfter).toBe(Math.round(maintenanceCalories(planProfile(state))! - 1.5 * 500));
+    expect(guideBefore - guideAfter).toBe(250);
+  });
+
+  it("holds the calorie floor instead of promising a pace that would breach it", () => {
+    const state = planState({ heightIn: 60, weightLb: 120, goalWeightLb: 100, activityPAL: 1.2, rateLbWeek: 1 });
+    state.weights = [];
+    const root = document.createElement("main");
+    new DaybookApp(root, { load: () => state, save: vi.fn() }).start();
+    openSettings(root);
+
+    savePlan(root, { rateLbWeek: "5" });
+
+    openSettings(root);
+    expect(root.querySelector<HTMLInputElement>('input[name="dailyGuide"]')!.value).toBe("1000");
+    expect(calorieGuidance(planProfile(state)).floorLimited).toBe(true);
+  });
+
+  it("keeps the chosen pace when only the activity level changes, and moves the calories", () => {
+    const state = planState({ activityPAL: 1.2 });
+    const root = document.createElement("main");
+    new DaybookApp(root, { load: () => state, save: vi.fn() }).start();
+    openSettings(root);
+    const guideBefore = Number(root.querySelector<HTMLInputElement>('input[name="dailyGuide"]')!.value);
+
+    savePlan(root, { activityPAL: "1.6" });
+
+    // The pace is the stored intent, so a busier normal day buys calories rather than speed.
+    expect(state.profile.rateLbWeek).toBe(1.5);
+    openSettings(root);
+    expect(Number(root.querySelector<HTMLInputElement>('input[name="dailyGuide"]')!.value)).toBeGreaterThan(guideBefore);
+  });
+
+  it("keeps a typed guide usable when there is no body baseline to derive a pace from", () => {
+    const state = createState(isoDate());
+    Object.assign(state.profile, { onboardingComplete: true });
+    const root = document.createElement("main");
+    new DaybookApp(root, { load: () => state, save: vi.fn() }).start();
+    openSettings(root);
+
+    savePlan(root, { dailyGuide: "1800" });
+
+    expect(state.profile.manualDailyGuide).toBe(1800);
+    openSettings(root);
+    expect(root.querySelector<HTMLInputElement>('input[name="dailyGuide"]')!.value).toBe("1800");
   });
 });
 
@@ -219,15 +327,20 @@ describe("calorie trends and exercise", () => {
     expect(root.querySelector(".progress-panel")?.textContent).toContain("No check-ins yet");
   });
 
-  it("uses a saved manual calorie guide in the plan KPI", () => {
+  it("loads a saved manual calorie guide as the pace it implies, with one figure on Progress", () => {
     const today = isoDate();
-    const state = createState(today);
-    Object.assign(state.profile, { onboardingComplete: true, age: 35, sexForEquation: "female", heightIn: 66, weightLb: 196, goalWeightLb: 160, goalType: "lose", rateLbWeek: 1, manualDailyGuide: 2100 });
-    for (let offset = -7; offset <= -1; offset += 1) state.entries.push(createQuickCalorieEntry(1845, shiftDate(today, offset), "dinner"));
+    const saved = createState(today);
+    Object.assign(saved.profile, { onboardingComplete: true, age: 35, sexForEquation: "female", heightIn: 66, weightLb: 196, goalWeightLb: 160, goalType: "lose", rateLbWeek: 1, manualDailyGuide: 2100 });
+    for (let offset = -7; offset <= -1; offset += 1) saved.entries.push(createQuickCalorieEntry(1845, shiftDate(today, offset), "dinner"));
+    const state = migrateState(saved);
+
+    // The guide the user actually saved survives; it is now expressed as one pace.
+    expect(state.profile.manualDailyGuide).toBeNull();
+    expect(state.profile.rateLbWeek).toBeCloseTo(paceFromDailyGuide(planProfile(saved), 2100)!, 6);
+
     const root = document.createElement("main");
     new DaybookApp(root, { load: () => state, save: vi.fn() }).start();
     root.querySelector<HTMLElement>('[data-action="view"][data-view="trend"]')!.click();
-
     expect(root.querySelector(".forecast-kpi.exercise b")?.textContent).toBe("2,100");
   });
 

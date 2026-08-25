@@ -55,6 +55,24 @@ export interface Guidance {
   floorLimited: boolean;
 }
 
+/** Energy burned on a normal day before planned workouts. Independent of the chosen pace. */
+export const maintenanceCalories = (profile: Profile): number | null => {
+  const resting = restingMetabolicRate(profile);
+  return resting === null ? null : resting * profile.activityPAL;
+};
+
+/**
+ * The inverse of the guide: the weekly pace a chosen daily calorie figure actually produces.
+ * Pace and guide are two views of one plan intent (DEC-04), so editing either must move the other.
+ */
+export const paceFromDailyGuide = (profile: Profile, guide: number): number | null => {
+  const maintenance = maintenanceCalories(profile);
+  if (maintenance === null || !Number.isFinite(guide) || guide <= 0) return null;
+  if (profile.goalType === "maintain") return 0;
+  const gap = profile.goalType === "gain" ? guide - maintenance : maintenance - guide;
+  return Math.max(0, gap / 500);
+};
+
 export const calorieGuidance = (profile: Profile): Guidance => {
   const result: Guidance = {
     ok: false,
@@ -97,8 +115,14 @@ export const calorieGuidance = (profile: Profile): Guidance => {
   return result;
 };
 
+/**
+ * The plan's daily calorie guide. Derived from the one stored intent (DEC-04); a legacy manual
+ * guide is honoured only while no body baseline exists to derive from, and migration converts
+ * it into the pace it implies as soon as one does.
+ */
 export const dailyCalorieGuide = (profile: Profile): number | null =>
-  profile.manualDailyGuide && profile.manualDailyGuide > 0 ? profile.manualDailyGuide : calorieGuidance(profile).target;
+  calorieGuidance(profile).target
+  ?? (profile.manualDailyGuide && profile.manualDailyGuide > 0 ? profile.manualDailyGuide : null);
 
 export const nutritionTargets = (profile: Profile): NutritionTargets | null => {
   const calories = dailyCalorieGuide(profile);

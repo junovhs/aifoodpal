@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { applyAiResponse, buildAiPrompt, buildFoodAiPrompt, importFoodDraft, parseAiResponse } from "../src/ai";
 import { createEntry, createQuickCalorieEntry, createState, moveDiaryEntry, normalizeFood, protectedSnackBudget, removeFoodFromLibrary, type AppState } from "../src/model";
-import { calorieGuidance, calorieTrend, exerciseCalories, goalDateFromPace, goalProgressPercent, nutritionTargets, planProfile, startWeight, totalsFor, weightProjection } from "../src/nutrition";
+import { calorieGuidance, calorieTrend, exerciseCalories, goalDateFromPace, goalProgressPercent, maintenanceCalories, nutritionTargets, paceFromDailyGuide, planProfile, startWeight, totalsFor, weightProjection } from "../src/nutrition";
 import { exportBackup, migrateState, parseBackup } from "../src/storage";
 import { calendarGrid, formatMonth, shiftMonth } from "../src/calendar";
 import { createComboFood } from "../src/combos";
@@ -62,6 +62,48 @@ describe("nutrition domain", () => {
     expect(planProfile(state).weightLb).toBe(180);
     expect(calorieGuidance(planProfile(state)).target).toBe(calorieGuidance({ ...state.profile, weightLb: 180 }).target);
     expect(weightProjection(state, "2026-08-23")).toBe(weightProjection(state, "2026-08-23"));
+  });
+
+  it("treats pace and the daily guide as two views of one intent", () => {
+    const profile = readyState().profile;
+    const maintenance = maintenanceCalories(profile)!;
+
+    // Each direction is the exact inverse of the other, so a round trip loses nothing.
+    expect(paceFromDailyGuide(profile, maintenance - 750)).toBeCloseTo(1.5, 6);
+    expect(calorieGuidance({ ...profile, rateLbWeek: 1.5 }).target).toBeCloseTo(maintenance - 750, 6);
+    expect(calorieGuidance({ ...profile, rateLbWeek: paceFromDailyGuide(profile, 1600)! }).target).toBeCloseTo(1600, 6);
+
+    // Gaining spends the same 500 kcal/day per lb/week in the other direction.
+    expect(paceFromDailyGuide({ ...profile, goalType: "gain" }, maintenance + 500)).toBeCloseTo(1, 6);
+    expect(paceFromDailyGuide({ ...profile, goalType: "maintain" }, 1600)).toBe(0);
+
+    // Without a body baseline there is nothing to invert.
+    expect(paceFromDailyGuide({ ...profile, sexForEquation: null }, 1600)).toBeNull();
+  });
+
+  it("loads a saved manual guide as one pace instead of a second plan number", () => {
+    const saved = readyState();
+    saved.profile.manualDailyGuide = 1600;
+    saved.profile.rateLbWeek = 1.5;
+    const expected = paceFromDailyGuide(planProfile(saved), 1600)!;
+
+    const migrated = migrateState(saved);
+    expect(migrated.profile.manualDailyGuide).toBeNull();
+    expect(migrated.profile.rateLbWeek).toBeCloseTo(expected, 6);
+    // The guide the user saved is exactly what the single intent still produces.
+    expect(calorieGuidance(planProfile(migrated)).target).toBeCloseTo(1600, 6);
+
+    // With no baseline to invert, the typed guide is kept rather than discarded.
+    const bare = createState("2026-08-17");
+    bare.profile.manualDailyGuide = 1800;
+    expect(migrateState(bare).profile.manualDailyGuide).toBe(1800);
+  });
+
+  it("holds the calorie floor and reports that the pace is limited by it", () => {
+    const profile = { ...readyState().profile, rateLbWeek: 5 };
+    const guidance = calorieGuidance(profile);
+    expect(guidance.target).toBe(1000);
+    expect(guidance.floorLimited).toBe(true);
   });
 
   it("seeds a missing starting weight once, preferring the earliest check-in", () => {

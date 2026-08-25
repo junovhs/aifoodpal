@@ -4,7 +4,7 @@ import { prepareImage, type CapturedImage } from "./image";
 import { CaptureError, captureFoodViaSupabase, captureToFoodDraft, type CaptureFoodClient } from "./capture-client";
 import { decodeBarcode, lookupOpenFoodFacts, scanBarcode, type BarcodeResult } from "./barcode";
 import { createEntry, createQuickCalorieEntry, isoDate, moveDiaryEntry, normalizeFood, normalizePeriod, PERIODS, protectedSnackBudget, removeFoodFromLibrary, uid, type AppState, type ExerciseKind, type Food, type FoodInput, type Period, type RecipeIngredient, type Weight } from "./model";
-import { calorieGuidance, calorieTrend, dailyCalorieGuide, exerciseCalories, formatDate, goalDateFromPace, goalProgressPercent, kgToPounds, latestWeight, nutritionTargets, planProfile, poundsToKg, round, shiftDate, startWeight, totalsFor, weightProjection } from "./nutrition";
+import { calorieGuidance, calorieTrend, dailyCalorieGuide, exerciseCalories, formatDate, goalDateFromPace, goalProgressPercent, kgToPounds, latestWeight, nutritionTargets, paceFromDailyGuide, planProfile, poundsToKg, round, shiftDate, startWeight, totalsFor, weightProjection } from "./nutrition";
 import { exportBackup, parseBackup, type StateRepository } from "./storage";
 import { icon, renderIcons } from "./icons";
 import { calendarGrid, formatMonth, shiftMonth } from "./calendar";
@@ -401,8 +401,9 @@ export class DaybookApp {
   private settings(): string {
     const profile = this.state.profile;
     const guidance = calorieGuidance(planProfile(this.state));
+    const guide = dailyCalorieGuide(planProfile(this.state));
     const sync = this.syncStatus ? `<span class="sync-settings-host" data-sync-settings>${this.syncSettingsHtml()}</span>` : "";
-    return `<div class="head"><div><span class="eyebrow">Preferences</span><h1 class="title">Settings</h1><p class="subtitle">Plan, portability, and privacy.</p></div></div><form data-form="settings" class="card pad stack"><div class="two">${field("daily calorie guide", "manualDailyGuide", profile.manualDailyGuide ?? "", "number", "min=500 placeholder=automatic")}${field(`goal weight (${this.weightUnit()})`, "goalWeight", this.displayWeight(profile.goalWeightLb) ?? "", "number", "step=.1")}${field("weekly pace (lb)", "rateLbWeek", profile.rateLbWeek, "number", "min=0 step=.25")}</div>${activityField(profile.activityPAL)}<label class="field"><span>goal</span><select name="goalType"><option value="lose" ${profile.goalType === "lose" ? "selected" : ""}>lose</option><option value="maintain" ${profile.goalType === "maintain" ? "selected" : ""}>maintain</option><option value="gain" ${profile.goalType === "gain" ? "selected" : ""}>gain</option></select></label><div class="notice">${guidance.ok ? `Automatic estimate: ${fmt(guidance.target)} kcal/day${guidance.weeks ? ` · roughly ${fmt(guidance.weeks)} weeks` : ""}.` : html(guidance.reason)}</div><button class="btn-primary" type="submit">save plan</button></form><section class="section"><p class="label">snack plan</p>${this.snackBudgetForm()}</section><section class="section"><p class="label">services & data</p><div class="card settings"><button class="setting" data-action="open-ai"><span>AI bridge</span><span class="tiny">copy / paste</span></button>${sync}<button class="setting" data-action="open-backup"><span>backup & restore</span><span class="tiny">portable JSON</span></button><button class="setting" data-action="onboard"><span>edit baseline</span><span class="tiny">profile setup</span></button></div></section>`;
+    return `<div class="head"><div><span class="eyebrow">Preferences</span><h1 class="title">Settings</h1><p class="subtitle">Plan, portability, and privacy.</p></div></div><form data-form="settings" class="card pad stack"><div class="two">${field("daily calorie guide", "dailyGuide", guide === null ? "" : Math.round(guide), "number", "min=500 placeholder=automatic")}${field(`goal weight (${this.weightUnit()})`, "goalWeight", this.displayWeight(profile.goalWeightLb) ?? "", "number", "step=.1")}${field("weekly pace (lb)", "rateLbWeek", round(profile.rateLbWeek, 2), "number", "min=0 step=.01")}</div>${activityField(profile.activityPAL)}<label class="field"><span>goal</span><select name="goalType"><option value="lose" ${profile.goalType === "lose" ? "selected" : ""}>lose</option><option value="maintain" ${profile.goalType === "maintain" ? "selected" : ""}>maintain</option><option value="gain" ${profile.goalType === "gain" ? "selected" : ""}>gain</option></select></label><div class="notice">${guidance.ok ? `These two move together. ${guidance.weeks ? `At this pace you reach your goal in roughly ${fmt(guidance.weeks)} weeks.` : "Add a goal weight to see how long this takes."}` : html(guidance.reason)}</div><button class="btn-primary" type="submit">save plan</button></form><section class="section"><p class="label">snack plan</p>${this.snackBudgetForm()}</section><section class="section"><p class="label">services & data</p><div class="card settings"><button class="setting" data-action="open-ai"><span>AI bridge</span><span class="tiny">copy / paste</span></button>${sync}<button class="setting" data-action="open-backup"><span>backup & restore</span><span class="tiny">portable JSON</span></button><button class="setting" data-action="onboard"><span>edit baseline</span><span class="tiny">profile setup</span></button></div></section>`;
   }
 
   private onboarding(): string {
@@ -666,7 +667,44 @@ export class DaybookApp {
     this.modal = null;
     this.save("exercise added");
   }
-  private submitSettings(data: FormData): void { const goal = getNumber(data, "goalWeight"); Object.assign(this.state.profile, { manualDailyGuide: getNumber(data, "manualDailyGuide"), activityPAL: getNumber(data, "activityPAL") ?? 1.6, goalWeightLb: goal && this.state.profile.units === "metric" ? kgToPounds(goal) : goal, rateLbWeek: getNumber(data, "rateLbWeek") ?? 0, goalType: data.get("goalType") }); this.save("plan saved"); }
+  private submitSettings(data: FormData): void {
+    const profile = this.state.profile;
+    const goal = getNumber(data, "goalWeight");
+    const submittedPace = getNumber(data, "rateLbWeek") ?? 0;
+    const submittedGuide = getNumber(data, "dailyGuide");
+    // Compare against what the form rendered, so a field the user never touched is not read as
+    // an edit. Otherwise changing only the activity level would silently rewrite the pace to
+    // preserve a calorie figure the user did not choose.
+    const renderedPace = round(profile.rateLbWeek, 2);
+    const renderedGuide = dailyCalorieGuide(planProfile(this.state));
+    const paceEdited = Math.abs(submittedPace - renderedPace) > 0.001;
+    const guideEdited = submittedGuide !== null && (renderedGuide === null || Math.round(submittedGuide) !== Math.round(renderedGuide));
+
+    // Body baseline and goal first: the pace a typed calorie figure implies depends on both.
+    Object.assign(profile, {
+      activityPAL: getNumber(data, "activityPAL") ?? 1.6,
+      goalWeightLb: goal && profile.units === "metric" ? kgToPounds(goal) : goal,
+      goalType: data.get("goalType"),
+    });
+
+    // Pace and the daily guide are two views of one plan intent (DEC-04). Whichever the user
+    // moved wins and the other is recomputed, so neither is stored as a second number that can
+    // contradict the first. Editing both is resolved in favour of the pace.
+    if (calorieGuidance(planProfile(this.state)).target === null) {
+      // No automatic guidance is available at all (missing baseline, under 18, pregnancy), so
+      // there is no derived figure to contradict and the typed guide is the only one the user has.
+      profile.manualDailyGuide = submittedGuide;
+      profile.rateLbWeek = Math.max(0, round(submittedPace, 2));
+    } else {
+      if (paceEdited) profile.rateLbWeek = Math.max(0, round(submittedPace, 2));
+      else if (guideEdited) {
+        const pace = paceFromDailyGuide(planProfile(this.state), submittedGuide!);
+        if (pace !== null) profile.rateLbWeek = pace;
+      }
+      profile.manualDailyGuide = null;
+    }
+    this.save("plan saved");
+  }
   private submitSnackBudget(data: FormData): void {
     const enabled = data.get("enabled") === "on";
     const calories = Math.round(getNumber(data, "calories") ?? this.state.prefs.protectedSnackCalories);

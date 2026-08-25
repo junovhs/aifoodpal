@@ -6,7 +6,7 @@ import {
   normalizePeriod,
   type AppState,
 } from "./model";
-import { startWeight } from "./nutrition";
+import { paceFromDailyGuide, planProfile, startWeight } from "./nutrition";
 
 export const STORAGE_KEY = "daybook.prototype.v1";
 
@@ -42,6 +42,16 @@ export const migrateState = (value: unknown): AppState => {
   // States saved before the plan recorded its own starting weight (DEC-05) infer one once,
   // here, so the running app only ever reads a stored fact.
   state.profile.startWeightLb ??= startWeight(state);
+  // A saved manual guide was a second, independently editable plan number that could contradict
+  // the pace (DEC-04). Convert it into the pace it actually implies so the loaded plan has one
+  // intent, keeping the user's own number as the thing the conversion preserves.
+  if (state.profile.manualDailyGuide && state.profile.manualDailyGuide > 0) {
+    const pace = paceFromDailyGuide(planProfile(state), state.profile.manualDailyGuide);
+    if (pace !== null) {
+      state.profile.rateLbWeek = pace;
+      state.profile.manualDailyGuide = null;
+    }
+  }
   return state;
 };
 
