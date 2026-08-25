@@ -255,6 +255,19 @@ button:disabled { cursor: wait; opacity: .58; transform: none; }
   .steer-line { font-size: 15px; }
   .steer-track { height: 34px; }
 }
+/* The plan screen: plain questions, with the sentence they add up to kept in view (DEC-07). */
+.plan-form { display: grid; gap: 12px; padding-bottom: 8px; }
+.plan-section .field span { font-size: 12px; }
+.plan-now { margin: 0; font: 400 16px/1.4 Georgia, "Times New Roman", serif; }
+.plan-now em { color: var(--accent); font-style: normal; font-weight: 600; }
+.plan-pair, .plan-why { margin: -2px 0 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.plan-result { display: grid; gap: 4px; padding: 13px 15px; border: 1px solid color-mix(in oklch, var(--accent) 22%, var(--line)); border-radius: var(--radius); background: var(--accent-soft); }
+.plan-result strong { font: 500 16px/1.35 Georgia, "Times New Roman", serif; }
+.plan-result span { color: var(--text-soft); font-size: 11px; line-height: 1.45; }
+@media (max-width: 720px) {
+  .plan-now { font-size: 15px; }
+  .plan-result strong { font-size: 15px; }
+}
 .panel-title { display: flex; align-items: center; gap: 9px; color: var(--text-soft); font-size: 9px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
 .panel-title .icon { color: var(--accent); }
 .trend-chart { padding: 17px 22px 12px; overflow: hidden; }

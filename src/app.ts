@@ -3,7 +3,7 @@ import { NOTE_MAX_CHARS, type CaptureMode } from "./ai-capture";
 import { prepareImage, type CapturedImage } from "./image";
 import { CaptureError, captureFoodViaSupabase, captureToFoodDraft, type CaptureFoodClient } from "./capture-client";
 import { decodeBarcode, lookupOpenFoodFacts, scanBarcode, type BarcodeResult } from "./barcode";
-import { createEntry, createQuickCalorieEntry, isoDate, moveDiaryEntry, normalizeFood, normalizePeriod, PERIODS, protectedSnackBudget, removeFoodFromLibrary, uid, type AppState, type ExerciseKind, type Food, type FoodInput, type Period, type RecipeIngredient, type Weight } from "./model";
+import { createEntry, createQuickCalorieEntry, isoDate, moveDiaryEntry, normalizeFood, normalizePeriod, PERIODS, protectedSnackBudget, removeFoodFromLibrary, uid, type AppState, type ExerciseKind, type Food, type FoodInput, type GoalType, type Period, type Profile, type RecipeIngredient, type Weight } from "./model";
 import { CALORIE_FLOOR, PROJECTION_WINDOW_DAYS, calorieGuidance, calorieTrend, dailyCalorieGuide, exerciseCalories, formatDate, goalDateFromPace, goalProgressPercent, kgToPounds, latestWeight, nutritionTargets, paceFromDailyGuide, parseLocalDate, planProfile, poundsToKg, round, shiftDate, startWeight, totalsFor, weekBalance, weightProjection, type WeekBalance, type WeightProjection } from "./nutrition";
 import { exportBackup, parseBackup, type StateRepository } from "./storage";
 import { icon, renderIcons } from "./icons";
@@ -14,7 +14,7 @@ import { DiaryDragController } from "./diary-drag";
 import type { AccountController } from "./account";
 import { CloudStateRepository, type SyncStatus } from "./cloud-sync";
 
-type View = "day" | "calendar" | "library" | "trend" | "settings";
+type View = "day" | "calendar" | "library" | "trend" | "settings" | "plan";
 type FoodModal = { kind: "food"; food?: Food; draft?: FoodInput; aiPrompt?: string; aiMessage?: string; aiError?: string; captureNote?: string; capturing?: CaptureMode };
 
 /** The impure half of photo capture, injected so the food editor is testable without a canvas or a server. */
@@ -49,6 +49,8 @@ export class DaybookApp {
   private state: AppState;
   private view: View = "day";
   private mealPeriod?: Period;
+  /** The plan field the user last typed in, so the derived half of the pair follows it (DEC-04). */
+  private planEdited?: string;
   private calendarMonth: string;
   private modal: Modal = null;
   private toastTimer?: number;
@@ -178,6 +180,7 @@ export class DaybookApp {
     if (this.view === "library") return this.library();
     if (this.view === "trend") return this.trend();
     if (this.view === "settings") return this.settings();
+    if (this.view === "plan") return this.plan();
     return this.wide() ? this.dayDesktop() : this.day();
   }
 
@@ -503,7 +506,7 @@ export class DaybookApp {
             ? `You reached your saved goal of <em>${fmt(this.displayWeight(goal), 1)} ${this.weightUnit()}</em>.`
           : planGoalDate
             ? `Your saved plan points to <em>${fmt(this.displayWeight(goal), 1)} ${this.weightUnit()}</em> around ${formatDate(planGoalDate)}.`
-            : "Set a weekly goal pace in Settings to create a plan timeline.";
+            : "Set a weekly pace on your plan screen to create a timeline.";
 
     const chart = this.weightChart(projection);
 
@@ -514,18 +517,107 @@ export class DaybookApp {
           : Math.abs(current - goal)
       : null;
     const goalBand = `<section class="goal-band card"><div class="goal-weight current"><span class="goal-icon">${icon("Weight")}</span><span><b>${fmt(this.displayWeight(current), 1)} <small>${this.weightUnit()}</small></b><small>Current weight</small></span></div><div class="goal-ring" style="--progress:${goalProgress * 3.6}deg"><b>${fmt(goalProgress)}%</b><small>toward goal</small></div><div class="goal-weight"><span class="goal-icon target">${icon("Target")}</span><span><b>${fmt(this.displayWeight(goal), 1)} <small>${this.weightUnit()}</small></b><small>Goal weight</small></span></div><div class="goal-remaining"><b>${fmt(this.displayWeight(remaining), 1)} ${this.weightUnit()} to go</b><span><i style="width:${goalProgress}%"></i></span></div></section>`;
-    const forecast = projection ? `<section class="forecast card"><div class="forecast-copy"><span class="eyebrow">Your plan</span><h2>${goalLine}</h2><p>Recent logs estimate ${fmt(Math.abs(this.displayWeight(projection.weeklyChangeLb) ?? 0), 2)} ${this.weightUnit()}/week ${projectedDirection}. That is a short-term estimate from seven completed days, not your plan timeline.</p></div><div class="forecast-kpis"><div class="forecast-kpi intake"><span>${icon("Flame")}</span><b>${fmt(projection.averageIntake)}</b><small>recent avg kcal</small></div><div class="forecast-kpi exercise"><span>${icon("Target")}</span><b>${fmt(planTarget)}</b><small>plan kcal/day</small></div><div class="forecast-kpi pace"><span>${icon("ChartNoAxesColumnIncreasing")}</span><b>${fmt(Math.abs(this.displayWeight(projection.weeklyChangeLb) ?? 0), 2)}</b><small>${this.weightUnit()}/week recent estimate</small></div><div class="forecast-kpi date"><span>${icon("CalendarRange")}</span><b>${planGoalDate ? formatDate(planGoalDate) : "—"}</b><small>plan goal date</small></div></div><p class="forecast-note">The plan date comes from the weekly pace saved in Settings. Recent calories and exercise only drive the 90-day estimate below.</p></section>` : `<section class="forecast card forecast-empty"><span class="eyebrow">Your plan</span><h2>${goalLine}</h2><p>Complete seven consecutive days of food logs to compare the plan with a short-term estimate.</p></section>`;
+    const forecast = projection ? `<section class="forecast card"><div class="forecast-copy"><span class="eyebrow">Your plan</span><h2>${goalLine}</h2><p>Recent logs estimate ${fmt(Math.abs(this.displayWeight(projection.weeklyChangeLb) ?? 0), 2)} ${this.weightUnit()}/week ${projectedDirection}. That is a short-term estimate from seven completed days, not your plan timeline.</p></div><div class="forecast-kpis"><div class="forecast-kpi intake"><span>${icon("Flame")}</span><b>${fmt(projection.averageIntake)}</b><small>recent avg kcal</small></div><div class="forecast-kpi exercise"><span>${icon("Target")}</span><b>${fmt(planTarget)}</b><small>plan kcal/day</small></div><div class="forecast-kpi pace"><span>${icon("ChartNoAxesColumnIncreasing")}</span><b>${fmt(Math.abs(this.displayWeight(projection.weeklyChangeLb) ?? 0), 2)}</b><small>${this.weightUnit()}/week recent estimate</small></div><div class="forecast-kpi date"><span>${icon("CalendarRange")}</span><b>${planGoalDate ? formatDate(planGoalDate) : "—"}</b><small>plan goal date</small></div></div><p class="forecast-note">The plan date comes from the pace you saved on your plan screen.</p></section>` : `<section class="forecast card forecast-empty"><span class="eyebrow">Your plan</span><h2>${goalLine}</h2><p>Complete seven consecutive days of food logs to compare the plan with a short-term estimate.</p></section>`;
     const weightRows = weights.length ? weights.map((weight) => `<div class="progress-row weight-row" data-weight-id="${weight.id}"><span class="history-dot"></span><span><b>${formatDate(weight.date)}</b><small>${new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date(weight.createdAt))}</small></span><strong>${fmt(this.displayWeight(weight.weightLb), 1)} ${this.weightUnit()}</strong><button class="icon-btn danger weight-delete" data-action="request-delete-weight" data-id="${weight.id}" aria-label="${html(`Delete ${fmt(this.displayWeight(weight.weightLb), 1)} ${this.weightUnit()} weight entry from ${formatDate(weight.date)}`)}" title="Delete weight entry">${icon("Trash2")}</button></div>`).join("") : `<div class="empty compact-empty">No check-ins yet.</div>`;
     const exerciseRows = exercises.length ? exercises.slice(0, 5).map((entry) => `<div class="progress-row exercise-row"><span class="exercise-symbol">${icon("Dumbbell")}</span><span><b>${formatDate(entry.date)}</b><small>${html(EXERCISE_LABELS[entry.kind])} · ${fmt(entry.minutes)} min</small></span><strong>~${fmt(current ? exerciseCalories(entry.kind, entry.minutes, current) : null)} kcal</strong><span class="row-arrow">${icon("ChevronRight")}</span></div>`).join("") : `<div class="empty compact-empty">No exercise logged yet. A short dumbbell session or walk still counts.</div>`;
-    return `<div class="progress-page"><div class="head"><div><span class="eyebrow">Your trend</span><h1 class="title">Progress</h1><p class="subtitle">Small check-ins make the longer pattern visible.</p></div><div class="progress-actions"><button class="btn btn-icon" data-action="open-exercise" aria-label="Add exercise">${icon("Dumbbell")}<span>Add exercise</span></button><button class="btn-primary btn-icon" data-action="open-weight" aria-label="Check in weight">${icon("Weight")}<span>Check in</span></button></div></div>${this.weekSteer()}${forecast}${chart}${goalBand}<div class="progress-history"><section class="progress-panel card"><div class="panel-title">${icon("ChartNoAxesColumnIncreasing")}<span>Weight history</span></div>${weightRows}</section><section class="progress-panel card"><div class="panel-title">${icon("Dumbbell")}<span>Recent exercise</span></div>${exerciseRows}</section></div></div>`;
+    return `<div class="progress-page"><div class="head"><div><span class="eyebrow">Your trend</span><h1 class="title">Progress</h1><p class="subtitle">Small check-ins make the longer pattern visible.</p></div><div class="progress-actions"><button class="btn btn-icon" data-action="open-exercise" aria-label="Add exercise">${icon("Dumbbell")}<span>Add exercise</span></button><button class="btn btn-icon" data-action="view" data-view="plan" aria-label="Open your plan">${icon("Target")}<span>Your plan</span></button><button class="btn-primary btn-icon" data-action="open-weight" aria-label="Check in weight">${icon("Weight")}<span>Check in</span></button></div></div>${this.weekSteer()}${forecast}${chart}${goalBand}<div class="progress-history"><section class="progress-panel card"><div class="panel-title">${icon("ChartNoAxesColumnIncreasing")}<span>Weight history</span></div>${weightRows}</section><section class="progress-panel card"><div class="panel-title">${icon("Dumbbell")}<span>Recent exercise</span></div>${exerciseRows}</section></div></div>`;
+  }
+
+
+  /**
+   * One screen for every plan answer, in plain questions (DEC-07). The calorie guide and the
+   * pace are two views of one intent (DEC-04), so changing either updates the other and the
+   * finish date as you type, before anything is saved.
+   */
+  private plan(): string {
+    const profile = this.state.profile;
+    const current = latestWeight(this.state);
+    const checkIn = [...this.state.weights].sort((left, right) => right.date.localeCompare(left.date))[0];
+    const nowLine = current == null
+      ? "You have not weighed in yet. Check in on Progress and this fills itself in."
+      : `Right now you weigh <em>${fmt(this.displayWeight(current), 1)} ${this.weightUnit()}</em>${checkIn ? `, from your check-in on ${formatDate(checkIn.date)}` : ""}.`;
+
+    const goalWord = { lose: "lose weight", maintain: "stay where I am", gain: "gain weight" };
+    const direction = `<label class="field"><span>Which way are you going?</span><select name="goalType">${(["lose", "maintain", "gain"] as const).map((value) => `<option value="${value}" ${profile.goalType === value ? "selected" : ""}>${goalWord[value]}</option>`).join("")}</select></label>`;
+    const sex = `<label class="field"><span>Which body does the calorie maths use?</span><select name="sex"><option value="">choose</option><option value="female" ${profile.sexForEquation === "female" ? "selected" : ""}>female</option><option value="male" ${profile.sexForEquation === "male" ? "selected" : ""}>male</option></select><small>Bodies burn energy at slightly different rates. This only changes the numbers, nothing else.</small></label>`;
+    const guide = dailyCalorieGuide(planProfile(this.state));
+
+    return `<div class="head"><div><span class="eyebrow">Your plan</span><h1 class="title">Your plan</h1><p class="subtitle">Change any answer and the numbers update as you type. Nothing is saved until you press save.</p></div></div><form data-form="plan" class="plan-form"><section class="card pad stack plan-section"><p class="plan-now">${nowLine}</p><div class="two">${field(`What would you like to weigh? (${this.weightUnit()})`, "goalWeight", this.displayWeight(profile.goalWeightLb) ?? "", "number", "step=.1 min=50")}${field(`What did you weigh when you started? (${this.weightUnit()})`, "startWeight", this.displayWeight(profile.startWeightLb) ?? "", "number", "step=.1 min=50")}</div>${direction}<div class="two">${field(`How fast? (${this.weightUnit()} a week)`, "rateLbWeek", round(profile.rateLbWeek, 2), "number", "min=0 step=.01")}${field("How many calories a day?", "dailyGuide", guide == null ? "" : Math.round(guide), "number", "min=500")}</div><p class="plan-pair">Those last two are one choice said two ways. Change either and the other follows.</p><div class="plan-result" data-plan-result>${this.planResult(planProfile(this.state))}</div></section><section class="card pad stack plan-section"><p class="label">about you</p><p class="plan-why">These four answers are what the calorie numbers are worked out from.</p><div class="two">${field("How old are you?", "age", profile.age ?? "", "number", "min=18 max=120")}${field("How tall are you? (inches)", "heightIn", profile.heightIn ?? "", "number", "min=36 step=.1")}</div>${sex}${activityField(profile.activityPAL)}</section><button class="btn-primary" type="submit">save plan</button></form>`;
+  }
+
+  /** The sentence the plan answers add up to, recomputed live from a draft profile. */
+  private planResult(profile: Profile): string {
+    const guidance = calorieGuidance(profile);
+    const guide = dailyCalorieGuide(profile);
+    if (!guidance.ok || guide == null) {
+      return `<strong>Fill in the answers below and this will say what they add up to.</strong><span>${html(guidance.reason ?? "Add your age, height and weight to work the numbers out.")}</span>`;
+    }
+    if (profile.goalType === "maintain") {
+      return `<strong>About ${fmt(guide)} calories a day keeps you where you are.</strong><span>No finish date to work towards, which is the point.</span>`;
+    }
+    const goal = profile.goalWeightLb;
+    const current = latestWeight(this.state);
+    const date = goal == null || current == null ? null : goalDateFromPace(current, goal, profile.rateLbWeek);
+    if (goal == null) return `<strong>About ${fmt(guide)} calories a day at this pace.</strong><span>Add a goal weight above to see when you would get there.</span>`;
+    if (!date) return `<strong>About ${fmt(guide)} calories a day.</strong><span>Set a pace above zero to see when you would reach ${fmt(this.displayWeight(goal), 1)} ${this.weightUnit()}.</span>`;
+    const floor = guidance.floorLimited ? ` That is as low as this app will go, so asking for a faster pace will not change it.` : "";
+    return `<strong>Eating about ${fmt(guide)} calories a day, you would reach ${fmt(this.displayWeight(goal), 1)} ${this.weightUnit()} around ${formatDate(date)}.</strong><span>That is ${fmt(guidance.weeks)} weeks from today.${floor}</span>`;
+  }
+
+  /**
+   * Reads the plan form into a draft profile. `edited` names the field the user last touched,
+   * so pace and calories stay two views of one intent instead of two saved numbers (DEC-04).
+   */
+  private planDraft(data: FormData, edited?: string): Profile {
+    const profile: Profile = { ...this.state.profile };
+    const metric = profile.units === "metric";
+    const goal = getNumber(data, "goalWeight");
+    const start = getNumber(data, "startWeight");
+    Object.assign(profile, {
+      age: getNumber(data, "age"),
+      heightIn: getNumber(data, "heightIn"),
+      sexForEquation: (data.get("sex") || null) as Profile["sexForEquation"],
+      activityPAL: getNumber(data, "activityPAL") ?? 1.6,
+      goalWeightLb: goal && metric ? kgToPounds(goal) : goal,
+      startWeightLb: start && metric ? kgToPounds(start) : start,
+      goalType: (data.get("goalType") as GoalType) || profile.goalType,
+    });
+    const pace = getNumber(data, "rateLbWeek") ?? 0;
+    const guide = getNumber(data, "dailyGuide");
+    if (edited === "dailyGuide" && guide) {
+      const implied = paceFromDailyGuide(profile, guide);
+      // With no body baseline there is nothing to convert, so the typed figure is kept as it is.
+      if (implied === null) profile.manualDailyGuide = guide;
+      else { profile.rateLbWeek = implied; profile.manualDailyGuide = null; }
+    } else {
+      profile.rateLbWeek = Math.max(0, round(pace, 2));
+      if (calorieGuidance(profile).target !== null) profile.manualDailyGuide = null;
+    }
+    return profile;
+  }
+
+  /** Redraws the derived halves of the plan form in place, so typing never loses focus. */
+  private refreshPlan(form: HTMLFormElement, edited: string): void {
+    const draft = this.planDraft(new FormData(form), edited);
+    const result = form.querySelector<HTMLElement>("[data-plan-result]");
+    if (result) result.innerHTML = this.planResult(draft);
+    const guideField = form.querySelector<HTMLInputElement>('input[name="dailyGuide"]');
+    const paceField = form.querySelector<HTMLInputElement>('input[name="rateLbWeek"]');
+    const guide = dailyCalorieGuide(draft);
+    if (guideField && edited !== "dailyGuide") guideField.value = guide == null ? "" : String(Math.round(guide));
+    if (paceField && edited === "dailyGuide") paceField.value = String(round(draft.rateLbWeek, 2));
+  }
+
+  private submitPlan(data: FormData): void {
+    this.state.profile = this.planDraft(data, this.planEdited);
+    this.planEdited = undefined;
+    this.view = "trend";
+    this.save("plan saved");
   }
 
   private settings(): string {
-    const profile = this.state.profile;
-    const guidance = calorieGuidance(planProfile(this.state));
-    const guide = dailyCalorieGuide(planProfile(this.state));
     const sync = this.syncStatus ? `<span class="sync-settings-host" data-sync-settings>${this.syncSettingsHtml()}</span>` : "";
-    return `<div class="head"><div><span class="eyebrow">Preferences</span><h1 class="title">Settings</h1><p class="subtitle">Plan, portability, and privacy.</p></div></div><form data-form="settings" class="card pad stack"><div class="two">${field("daily calorie guide", "dailyGuide", guide === null ? "" : Math.round(guide), "number", "min=500 placeholder=automatic")}${field(`goal weight (${this.weightUnit()})`, "goalWeight", this.displayWeight(profile.goalWeightLb) ?? "", "number", "step=.1")}${field("weekly pace (lb)", "rateLbWeek", round(profile.rateLbWeek, 2), "number", "min=0 step=.01")}</div>${activityField(profile.activityPAL)}<label class="field"><span>goal</span><select name="goalType"><option value="lose" ${profile.goalType === "lose" ? "selected" : ""}>lose</option><option value="maintain" ${profile.goalType === "maintain" ? "selected" : ""}>maintain</option><option value="gain" ${profile.goalType === "gain" ? "selected" : ""}>gain</option></select></label><div class="notice">${guidance.ok ? `These two move together. ${guidance.weeks ? `At this pace you reach your goal in roughly ${fmt(guidance.weeks)} weeks.` : "Add a goal weight to see how long this takes."}` : html(guidance.reason)}</div><button class="btn-primary" type="submit">save plan</button></form><section class="section"><p class="label">snack plan</p>${this.snackBudgetForm()}</section><section class="section"><p class="label">services & data</p><div class="card settings"><button class="setting" data-action="open-ai"><span>AI bridge</span><span class="tiny">copy / paste</span></button>${sync}<button class="setting" data-action="open-backup"><span>backup & restore</span><span class="tiny">portable JSON</span></button><button class="setting" data-action="onboard"><span>edit baseline</span><span class="tiny">profile setup</span></button></div></section>`;
+    return `<div class="head"><div><span class="eyebrow">Preferences</span><h1 class="title">Settings</h1><p class="subtitle">Portability and privacy. Your plan lives on its own screen.</p></div></div><section class="section"><p class="label">your plan</p><div class="card settings"><button class="setting" data-action="view" data-view="plan"><span>Goal, pace, and daily calories</span><span class="tiny">open your plan</span></button></div></section><section class="section"><p class="label">snack plan</p>${this.snackBudgetForm()}</section><section class="section"><p class="label">services &amp; data</p><div class="card settings"><button class="setting" data-action="open-ai"><span>AI bridge</span><span class="tiny">copy / paste</span></button>${sync}<button class="setting" data-action="open-backup"><span>backup &amp; restore</span><span class="tiny">portable JSON</span></button></div></section>`;
   }
 
   private onboarding(): string {
@@ -608,7 +700,7 @@ export class DaybookApp {
       const input = this.root.querySelector<HTMLInputElement>("[data-library-search]");
       if (input) { input.value = ""; this.filterLibrary(""); input.focus(); }
     }
-    if (action === "view") { this.view = button.dataset.view as View; this.mealPeriod = undefined; if (this.view === "calendar") this.calendarMonth = this.state.prefs.date.slice(0, 7); this.render(); }
+    if (action === "view") { this.view = button.dataset.view as View; this.mealPeriod = undefined; this.planEdited = undefined; if (this.view === "calendar") this.calendarMonth = this.state.prefs.date.slice(0, 7); this.render(); }
     if (action === "open-meal" && PERIODS.includes(button.dataset.period as Period)) { this.mealPeriod = button.dataset.period as Period; this.render(); }
     if (action === "back-today") { this.mealPeriod = undefined; this.render(); }
     if (action === "date") { this.state.prefs.date = shiftDate(this.state.prefs.date, Number(button.dataset.days)); this.save(); }
@@ -646,7 +738,6 @@ export class DaybookApp {
     if (action === "open-exercise") { this.modal = { kind: "exercise" }; this.render(); }
     if (action === "open-backup") { this.modal = { kind: "backup" }; this.render(); }
     if (action === "open-ai") { this.modal = { kind: "ai", stage: "request" }; this.render(); }
-    if (action === "onboard") { this.state.profile.onboardingComplete = false; this.render(); }
     if (action === "download") this.download();
     if (action === "copy-backup") void this.copy(exportBackup(this.state), "backup copied");
     if (action === "copy-prompt" && this.modal?.kind === "ai") void this.copy(this.modal.prompt ?? "", "packet copied");
@@ -697,6 +788,8 @@ export class DaybookApp {
   private onInput(event: Event): void {
     const target = event.target as HTMLInputElement;
     if (target.matches("[data-library-search]")) { this.filterLibrary(target.value); return; }
+    const planForm = target.closest<HTMLFormElement>('form[data-form="plan"]');
+    if (planForm && target.name) { this.planEdited = target.name; this.refreshPlan(planForm, target.name); return; }
     if (!target.matches("[data-quick-calories]") || this.modal?.kind !== "quick") return;
     this.modal.calories = Math.max(0, Math.round(Number(target.value) || 0));
     const label = this.root.querySelector<HTMLElement>(".quick-confirm span");
@@ -719,7 +812,7 @@ export class DaybookApp {
       if (kind === "weight") this.submitWeight(data);
       if (kind === "exercise") this.submitExercise(data);
       if (kind === "restore") { this.state = parseBackup(String(data.get("backup"))); this.modal = null; this.save("backup restored"); }
-      if (kind === "settings") this.submitSettings(data);
+      if (kind === "plan") this.submitPlan(data);
       if (kind === "snack-budget") this.submitSnackBudget(data);
       if (kind === "ai-request") { this.modal = { kind: "ai", stage: "prompt", prompt: buildAiPrompt(this.state, String(data.get("request"))) }; this.render(); }
       if (kind === "ai-reply") { const response = parseAiResponse(String(data.get("reply"))); this.modal = { kind: "ai", stage: "preview", response }; this.render(); }
@@ -788,44 +881,6 @@ export class DaybookApp {
     this.state.exercises.push({ id: uid("exercise"), date: String(data.get("date")), kind, minutes, createdAt: now, updatedAt: now });
     this.modal = null;
     this.save("exercise added");
-  }
-  private submitSettings(data: FormData): void {
-    const profile = this.state.profile;
-    const goal = getNumber(data, "goalWeight");
-    const submittedPace = getNumber(data, "rateLbWeek") ?? 0;
-    const submittedGuide = getNumber(data, "dailyGuide");
-    // Compare against what the form rendered, so a field the user never touched is not read as
-    // an edit. Otherwise changing only the activity level would silently rewrite the pace to
-    // preserve a calorie figure the user did not choose.
-    const renderedPace = round(profile.rateLbWeek, 2);
-    const renderedGuide = dailyCalorieGuide(planProfile(this.state));
-    const paceEdited = Math.abs(submittedPace - renderedPace) > 0.001;
-    const guideEdited = submittedGuide !== null && (renderedGuide === null || Math.round(submittedGuide) !== Math.round(renderedGuide));
-
-    // Body baseline and goal first: the pace a typed calorie figure implies depends on both.
-    Object.assign(profile, {
-      activityPAL: getNumber(data, "activityPAL") ?? 1.6,
-      goalWeightLb: goal && profile.units === "metric" ? kgToPounds(goal) : goal,
-      goalType: data.get("goalType"),
-    });
-
-    // Pace and the daily guide are two views of one plan intent (DEC-04). Whichever the user
-    // moved wins and the other is recomputed, so neither is stored as a second number that can
-    // contradict the first. Editing both is resolved in favour of the pace.
-    if (calorieGuidance(planProfile(this.state)).target === null) {
-      // No automatic guidance is available at all (missing baseline, under 18, pregnancy), so
-      // there is no derived figure to contradict and the typed guide is the only one the user has.
-      profile.manualDailyGuide = submittedGuide;
-      profile.rateLbWeek = Math.max(0, round(submittedPace, 2));
-    } else {
-      if (paceEdited) profile.rateLbWeek = Math.max(0, round(submittedPace, 2));
-      else if (guideEdited) {
-        const pace = paceFromDailyGuide(planProfile(this.state), submittedGuide!);
-        if (pace !== null) profile.rateLbWeek = pace;
-      }
-      profile.manualDailyGuide = null;
-    }
-    this.save("plan saved");
   }
   private submitSnackBudget(data: FormData): void {
     const enabled = data.get("enabled") === "on";

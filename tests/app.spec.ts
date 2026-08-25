@@ -4,11 +4,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { DaybookApp, type FoodCaptureDeps } from "../src/app";
 import { CaptureError } from "../src/capture-client";
 import { createEntry, createQuickCalorieEntry, createState, isoDate, normalizeFood, type AppState } from "../src/model";
-import { calorieGuidance, formatDate, goalDateFromPace, maintenanceCalories, paceFromDailyGuide, planProfile, shiftDate, weekBalance, weightProjection } from "../src/nutrition";
+import { calorieGuidance, formatDate, goalDateFromPace, maintenanceCalories, paceFromDailyGuide, planProfile, round, shiftDate, weekBalance, weightProjection } from "../src/nutrition";
 import { migrateState, type StateRepository } from "../src/storage";
 
 const openSettings = (root: HTMLElement): void => {
   root.querySelector<HTMLElement>('[data-action="view"][data-view="settings"]')!.click();
+};
+
+/** The plan now has its own screen, reached from Settings. */
+const openPlan = (root: HTMLElement): void => {
+  openSettings(root);
+  root.querySelector<HTMLElement>('[data-action="view"][data-view="plan"]')!.click();
 };
 
 describe("weight sourcing", () => {
@@ -30,8 +36,8 @@ describe("weight sourcing", () => {
     expect(ring).toContain("28%");
     expect(root.querySelector(".goal-band")?.textContent).toContain("36");
 
-    // The Settings guide must be computed from the check-in weight, not the stale 240.
-    openSettings(root);
+    // The plan's guide must be computed from the check-in weight, not the stale 240.
+    openPlan(root);
     const shown = root.querySelector<HTMLInputElement>('input[name="dailyGuide"]')!.value;
     const fromCheckIn = calorieGuidance({ ...state.profile, weightLb: 196 }).target!;
     const fromOnboarding = calorieGuidance({ ...state.profile, weightLb: 240 }).target!;
@@ -77,8 +83,13 @@ const planState = (over: Partial<AppState["profile"]> = {}) => {
 };
 
 const savePlan = (root: HTMLElement, values: Record<string, string>): void => {
-  const form = root.querySelector<HTMLFormElement>('form[data-form="settings"]')!;
-  for (const [name, value] of Object.entries(values)) form.querySelector<HTMLInputElement>(`[name="${name}"]`)!.value = value;
+  const form = root.querySelector<HTMLFormElement>('form[data-form="plan"]')!;
+  for (const [name, value] of Object.entries(values)) {
+    const control = form.querySelector<HTMLInputElement>(`[name="${name}"]`)!;
+    control.value = value;
+    // Typing is what tells the plan which half of the pair the user moved (DEC-04).
+    control.dispatchEvent(new Event("input", { bubbles: true }));
+  }
   form.requestSubmit();
 };
 
@@ -90,7 +101,7 @@ describe("one plan intent", () => {
     root.querySelector<HTMLElement>('[data-action="view"][data-view="trend"]')!.click();
     const dateBefore = root.querySelector(".forecast-kpi.date b")?.textContent;
 
-    openSettings(root);
+    openPlan(root);
     savePlan(root, { dailyGuide: "1600" });
 
     const implied = paceFromDailyGuide(planProfile(state), 1600)!;
@@ -99,7 +110,7 @@ describe("one plan intent", () => {
     // The guide is never kept as a second number that could contradict the pace.
     expect(state.profile.manualDailyGuide).toBeNull();
     // Reopening shows exactly what was typed, so the round trip loses nothing.
-    openSettings(root);
+    openPlan(root);
     expect(root.querySelector<HTMLInputElement>('input[name="dailyGuide"]')!.value).toBe("1600");
 
     root.querySelector<HTMLElement>('[data-action="view"][data-view="trend"]')!.click();
@@ -112,14 +123,14 @@ describe("one plan intent", () => {
     const state = planState({ rateLbWeek: 1 });
     const root = document.createElement("main");
     new DaybookApp(root, { load: () => state, save: vi.fn() }).start();
-    openSettings(root);
+    openPlan(root);
     const guideBefore = Number(root.querySelector<HTMLInputElement>('input[name="dailyGuide"]')!.value);
 
     savePlan(root, { rateLbWeek: "1.5" });
 
     expect(state.profile.rateLbWeek).toBe(1.5);
     expect(state.profile.manualDailyGuide).toBeNull();
-    openSettings(root);
+    openPlan(root);
     const guideAfter = Number(root.querySelector<HTMLInputElement>('input[name="dailyGuide"]')!.value);
     // A faster pace must cost calories, by exactly the 500 kcal/day per lb/week it is defined as.
     expect(guideAfter).toBe(Math.round(maintenanceCalories(planProfile(state))! - 1.5 * 500));
@@ -131,11 +142,11 @@ describe("one plan intent", () => {
     state.weights = [];
     const root = document.createElement("main");
     new DaybookApp(root, { load: () => state, save: vi.fn() }).start();
-    openSettings(root);
+    openPlan(root);
 
     savePlan(root, { rateLbWeek: "5" });
 
-    openSettings(root);
+    openPlan(root);
     expect(root.querySelector<HTMLInputElement>('input[name="dailyGuide"]')!.value).toBe("1000");
     expect(calorieGuidance(planProfile(state)).floorLimited).toBe(true);
   });
@@ -144,14 +155,14 @@ describe("one plan intent", () => {
     const state = planState({ activityPAL: 1.2 });
     const root = document.createElement("main");
     new DaybookApp(root, { load: () => state, save: vi.fn() }).start();
-    openSettings(root);
+    openPlan(root);
     const guideBefore = Number(root.querySelector<HTMLInputElement>('input[name="dailyGuide"]')!.value);
 
     savePlan(root, { activityPAL: "1.6" });
 
     // The pace is the stored intent, so a busier normal day buys calories rather than speed.
     expect(state.profile.rateLbWeek).toBe(1.5);
-    openSettings(root);
+    openPlan(root);
     expect(Number(root.querySelector<HTMLInputElement>('input[name="dailyGuide"]')!.value)).toBeGreaterThan(guideBefore);
   });
 
@@ -160,12 +171,12 @@ describe("one plan intent", () => {
     Object.assign(state.profile, { onboardingComplete: true });
     const root = document.createElement("main");
     new DaybookApp(root, { load: () => state, save: vi.fn() }).start();
-    openSettings(root);
+    openPlan(root);
 
     savePlan(root, { dailyGuide: "1800" });
 
     expect(state.profile.manualDailyGuide).toBe(1800);
-    openSettings(root);
+    openPlan(root);
     expect(root.querySelector<HTMLInputElement>('input[name="dailyGuide"]')!.value).toBe("1800");
   });
 });
@@ -192,6 +203,129 @@ const mount = (state: AppState): HTMLElement => {
 };
 
 const steerText = (root: HTMLElement): string => root.querySelector(".steer")?.textContent ?? "";
+
+describe("the plan screen", () => {
+  const typeInto = (root: HTMLElement, name: string, value: string): void => {
+    const control = root.querySelector<HTMLInputElement>(`form[data-form="plan"] [name="${name}"]`)!;
+    control.value = value;
+    control.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+  const resultText = (root: HTMLElement): string => root.querySelector("[data-plan-result]")?.textContent ?? "";
+  const valueOf = (root: HTMLElement, name: string): string =>
+    root.querySelector<HTMLInputElement>(`form[data-form="plan"] [name="${name}"]`)!.value;
+
+  it("asks four plain questions and answers them in one sentence", () => {
+    const root = mount(planState());
+    openPlan(root);
+
+    const text = root.querySelector(".plan-form")!.textContent ?? "";
+    for (const question of [
+      "What would you like to weigh?",
+      "Which way are you going?",
+      "How fast?",
+      "How many calories a day?",
+      "How old are you?",
+      "How tall are you?",
+    ]) expect(text).toContain(question);
+
+    // The choices are said in words, not in the app's own vocabulary.
+    expect(text).toContain("lose weight");
+    expect(text).toContain("stay where I am");
+    expect(resultText(root)).toMatch(/Eating about [\d,]+ calories a day, you would reach/);
+  });
+
+  it("moves the calorie guide and the finish date as the pace is typed, before saving", () => {
+    const state = planState({ rateLbWeek: 1 });
+    const root = mount(state);
+    openPlan(root);
+    const guideBefore = Number(valueOf(root, "dailyGuide"));
+    const resultBefore = resultText(root);
+
+    typeInto(root, "rateLbWeek", "1.5");
+
+    expect(Number(valueOf(root, "dailyGuide"))).toBe(guideBefore - 250);
+    expect(resultText(root)).not.toBe(resultBefore);
+    // Nothing is committed until save is pressed.
+    expect(state.profile.rateLbWeek).toBe(1);
+  });
+
+  it("moves the pace as the calorie guide is typed, before saving", () => {
+    const state = planState({ rateLbWeek: 1 });
+    const root = mount(state);
+    openPlan(root);
+
+    typeInto(root, "dailyGuide", "1600");
+
+    const implied = paceFromDailyGuide(planProfile(state), 1600)!;
+    expect(Number(valueOf(root, "rateLbWeek"))).toBeCloseTo(round(implied, 2), 2);
+    expect(state.profile.rateLbWeek).toBe(1);
+  });
+
+  it("saves the plan and shows the new finish date on Progress", () => {
+    const state = planState({ rateLbWeek: 1 });
+    const save = vi.fn<(next: AppState) => void>();
+    const root = document.createElement("main");
+    new DaybookApp(root, { load: () => state, save }).start();
+    openPlan(root);
+
+    typeInto(root, "rateLbWeek", "1.5");
+    root.querySelector<HTMLFormElement>('form[data-form="plan"]')!.requestSubmit();
+
+    expect(state.profile.rateLbWeek).toBe(1.5);
+    expect(save).toHaveBeenCalled();
+    // Saving lands the user back on Progress, where the date it changed is shown.
+    expect(root.querySelector(".forecast-kpi.date b")?.textContent)
+      .toBe(formatDate(goalDateFromPace(196, 160, 1.5)!));
+  });
+
+  it("records the starting weight the user types rather than inferring one", () => {
+    const state = planState();
+    const root = mount(state);
+    openPlan(root);
+
+    typeInto(root, "startWeight", "205");
+    root.querySelector<HTMLFormElement>('form[data-form="plan"]')!.requestSubmit();
+
+    expect(state.profile.startWeightLb).toBe(205);
+    expect(root.querySelector(".goal-ring")?.textContent).toContain("20%");
+  });
+
+  it("leaves no plan number or estimate behind in Settings", () => {
+    const root = mount(planState());
+    openSettings(root);
+
+    const text = root.textContent ?? "";
+    expect(root.querySelector('form[data-form="settings"]')).toBeNull();
+    expect(root.querySelector('[name="dailyGuide"]')).toBeNull();
+    expect(root.querySelector('[name="rateLbWeek"]')).toBeNull();
+    expect(root.querySelector('[name="goalWeight"]')).toBeNull();
+    expect(text).not.toContain("Automatic estimate");
+    // Settings points at the plan instead of holding it.
+    expect(root.querySelector('[data-action="view"][data-view="plan"]')).not.toBeNull();
+  });
+
+  it("says what is missing instead of showing numbers it cannot work out", () => {
+    const state = createState(isoDate());
+    Object.assign(state.profile, { onboardingComplete: true });
+    const root = mount(state);
+    openPlan(root);
+
+    expect(resultText(root)).toContain("Fill in the answers below");
+  });
+
+  it("renders inside the one contained scroll pane, like every other view (DEC-02)", () => {
+    const root = mount(planState());
+    openPlan(root);
+
+    // The shell contract: exactly one scroll pane, and this screen lives inside it.
+    const panes = root.querySelectorAll("[data-scroll-pane]");
+    expect(panes).toHaveLength(1);
+    expect(root.querySelectorAll(".plan-form")).toHaveLength(1);
+    expect(panes[0]!.contains(root.querySelector(".plan-form"))).toBe(true);
+    expect(root.querySelector(".top")).not.toBeNull();
+    expect(root.querySelector(".bottom")).not.toBeNull();
+  });
+});
 
 describe("steering the week", () => {
   it("reads a heavy day as calories borrowed and answers with one smaller number", () => {
@@ -698,12 +832,12 @@ describe("calorie trends and exercise", () => {
     expect(root.querySelectorAll(".progress-panel")).toHaveLength(2);
   });
 
-  it("uses plain-language baseline activity choices in Settings", () => {
+  it("uses plain-language baseline activity choices on the plan screen", () => {
     const state = createState();
     Object.assign(state.profile, { onboardingComplete: true, activityPAL: 1.6 });
     const root = document.createElement("main");
     new DaybookApp(root, { load: () => state, save: vi.fn() }).start();
-    openSettings(root);
+    openPlan(root);
 
     const activity = root.querySelector<HTMLSelectElement>('select[name="activityPAL"]')!;
     expect(activity.selectedOptions[0]?.textContent).toContain("Moderately active");
