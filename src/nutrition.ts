@@ -324,6 +324,11 @@ export const weightProjection = (state: AppState, anchor = isoDate()): WeightPro
 
 const REPAYMENT_DAYS = 7;
 
+/**
+ * One rolling week measured against the plan (DEC-06): what was eaten, what it borrowed or
+ * saved, the smallest adjustment that repays it, and where the goal date sits as a result.
+ * Every field is evidence about the window, never a verdict on a day.
+ */
 export interface WeekBalance {
   /** The plan's daily calorie guide the window is measured against. */
   guide: number;
