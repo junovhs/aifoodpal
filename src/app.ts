@@ -4,7 +4,7 @@ import { prepareImage, type CapturedImage } from "./image";
 import { CaptureError, captureFoodViaSupabase, captureToFoodDraft, type CaptureFoodClient } from "./capture-client";
 import { decodeBarcode, lookupOpenFoodFacts, scanBarcode, type BarcodeResult } from "./barcode";
 import { createEntry, createQuickCalorieEntry, isoDate, moveDiaryEntry, normalizeFood, normalizePeriod, PERIODS, protectedSnackBudget, removeFoodFromLibrary, uid, type AppState, type ExerciseKind, type Food, type FoodInput, type Period, type RecipeIngredient, type Weight } from "./model";
-import { calorieGuidance, calorieTrend, dailyCalorieGuide, exerciseCalories, formatDate, goalDateFromPace, goalProgressPercent, kgToPounds, latestWeight, nutritionTargets, poundsToKg, round, shiftDate, totalsFor, weightProjection } from "./nutrition";
+import { calorieGuidance, calorieTrend, dailyCalorieGuide, exerciseCalories, formatDate, goalDateFromPace, goalProgressPercent, kgToPounds, latestWeight, nutritionTargets, planProfile, poundsToKg, round, shiftDate, startWeight, totalsFor, weightProjection } from "./nutrition";
 import { exportBackup, parseBackup, type StateRepository } from "./storage";
 import { icon, renderIcons } from "./icons";
 import { calendarGrid, formatMonth, shiftMonth } from "./calendar";
@@ -113,7 +113,7 @@ export class DaybookApp {
   }
 
   private normalizeSnackBudget(): void {
-    const guide = dailyCalorieGuide(this.state.profile);
+    const guide = dailyCalorieGuide(planProfile(this.state));
     if (this.state.prefs.protectedSnackBudgetEnabled && guide) {
       this.state.prefs.protectedSnackCalories = Math.min(this.state.prefs.protectedSnackCalories, Math.max(1, Math.floor(guide) - 1));
     }
@@ -200,8 +200,8 @@ export class DaybookApp {
   private day(): string {
     const date = this.state.prefs.date;
     const totals = totalsFor(this.state, date);
-    const guide = dailyCalorieGuide(this.state.profile);
-    const targets = nutritionTargets(this.state.profile);
+    const guide = dailyCalorieGuide(planProfile(this.state));
+    const targets = nutritionTargets(planProfile(this.state));
     const pct = guide ? Math.min(100, totals.calories / guide * 100) : 0;
     const meals = PERIODS.map((period) => this.meal(period, date)).join("");
     const remaining = guide ? Math.max(0, guide - totals.calories) : null;
@@ -219,8 +219,8 @@ export class DaybookApp {
   private dayDesktop(): string {
     const date = this.state.prefs.date;
     const totals = totalsFor(this.state, date);
-    const guide = dailyCalorieGuide(this.state.profile);
-    const targets = nutritionTargets(this.state.profile);
+    const guide = dailyCalorieGuide(planProfile(this.state));
+    const targets = nutritionTargets(planProfile(this.state));
     const pct = guide ? Math.min(100, totals.calories / guide * 100) : 0;
     const meals = PERIODS.map((period) => this.mealGroup(period, date)).join("");
     const remaining = guide ? Math.max(0, guide - totals.calories) : null;
@@ -265,7 +265,7 @@ export class DaybookApp {
   }
 
   private snackBudgetForm(): string {
-    const guide = dailyCalorieGuide(this.state.profile);
+    const guide = dailyCalorieGuide(planProfile(this.state));
     const snackBudgetMax = guide ? `max="${Math.max(1, Math.floor(guide) - 1)}"` : "";
     return `<form class="snack-budget card" data-form="snack-budget"><label class="snack-budget-toggle"><input type="checkbox" name="enabled" ${this.state.prefs.protectedSnackBudgetEnabled ? "checked" : ""}><span><strong>Protect snack calories</strong><small>Warn when main meals use this reserve.</small></span></label><label class="snack-budget-amount"><span>Save</span><input type="number" name="calories" min="1" ${snackBudgetMax} step="1" inputmode="numeric" value="${this.state.prefs.protectedSnackCalories}" aria-label="Calories to save for snacks"><span>kcal</span></label><button class="tiny-btn" type="submit">Save</button></form>`;
   }
@@ -334,10 +334,10 @@ export class DaybookApp {
     const weights = [...this.state.weights].sort((a, b) => b.date.localeCompare(a.date));
     const exercises = [...this.state.exercises].sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
     const current = latestWeight(this.state);
-    const oldestWeight = weights.at(-1)?.weightLb ?? current;
+    const start = startWeight(this.state);
     const goal = this.state.profile.goalWeightLb;
     const projection = weightProjection(this.state);
-    const guidance = calorieGuidance({ ...this.state.profile, weightLb: current });
+    const guidance = calorieGuidance(planProfile(this.state));
     const goalReached = current != null && goal != null && (
       this.state.profile.goalType === "lose" ? current <= goal + .05
         : this.state.profile.goalType === "gain" ? current >= goal - .05
@@ -346,7 +346,7 @@ export class DaybookApp {
     const planGoalDate = guidance.ok && !goalReached && this.state.profile.goalType !== "maintain" && current != null && goal != null
       ? goalDateFromPace(current, goal, this.state.profile.rateLbWeek)
       : null;
-    const planTarget = dailyCalorieGuide({ ...this.state.profile, weightLb: current });
+    const planTarget = dailyCalorieGuide(planProfile(this.state));
     const projectedDirection = projection && projection.weeklyChangeLb >= 0 ? "losing" : "gaining";
     const goalLine = goal == null
       ? "Add a goal weight to create a plan timeline."
@@ -385,7 +385,7 @@ export class DaybookApp {
       chart = `<section class="trend-chart card"><div class="panel-title">${icon("ChartNoAxesColumnIncreasing")}<span>Recent 90-day estimate</span></div><div class="chart-stage"><svg viewBox="0 0 1000 205" role="img" aria-label="Short-term ${projectedDirection} estimate from ${fmt(this.displayWeight(current), 1)} ${this.weightUnit()} to ${fmt(this.displayWeight(pointWeights.at(-1)), 1)} ${this.weightUnit()} over 90 days"><g class="chart-grid">${grid}</g><polygon class="chart-area" points="${area}"/><polyline class="chart-line" points="${points}"/><g class="chart-dots">${dots}</g>${labels}</svg><span class="chart-callout chart-start" style="--x:${x(0) / 10}%;--y:${y(current) / 2.05}%"><b>${fmt(this.displayWeight(current), 1)} ${this.weightUnit()}</b><small>Current</small></span><span class="chart-callout chart-month" style="--x:${monthX / 10}%;--y:${monthY / 2.05}%"><b>${fmt(monthWeight, 1)} ${this.weightUnit()}</b><small>1 month · ${formatDate(shiftDate(startDate, 30))}</small></span></div></section>`;
     }
 
-    const goalProgress = goalReached ? 100 : oldestWeight != null && current != null && goal != null ? goalProgressPercent(oldestWeight, current, goal) : 0;
+    const goalProgress = goalReached ? 100 : start != null && current != null && goal != null ? goalProgressPercent(start, current, goal) : 0;
     const remaining = current != null && goal != null
       ? this.state.profile.goalType === "lose" ? Math.max(0, current - goal)
         : this.state.profile.goalType === "gain" ? Math.max(0, goal - current)
@@ -400,7 +400,7 @@ export class DaybookApp {
 
   private settings(): string {
     const profile = this.state.profile;
-    const guidance = calorieGuidance(profile);
+    const guidance = calorieGuidance(planProfile(this.state));
     const sync = this.syncStatus ? `<span class="sync-settings-host" data-sync-settings>${this.syncSettingsHtml()}</span>` : "";
     return `<div class="head"><div><span class="eyebrow">Preferences</span><h1 class="title">Settings</h1><p class="subtitle">Plan, portability, and privacy.</p></div></div><form data-form="settings" class="card pad stack"><div class="two">${field("daily calorie guide", "manualDailyGuide", profile.manualDailyGuide ?? "", "number", "min=500 placeholder=automatic")}${field(`goal weight (${this.weightUnit()})`, "goalWeight", this.displayWeight(profile.goalWeightLb) ?? "", "number", "step=.1")}${field("weekly pace (lb)", "rateLbWeek", profile.rateLbWeek, "number", "min=0 step=.25")}</div>${activityField(profile.activityPAL)}<label class="field"><span>goal</span><select name="goalType"><option value="lose" ${profile.goalType === "lose" ? "selected" : ""}>lose</option><option value="maintain" ${profile.goalType === "maintain" ? "selected" : ""}>maintain</option><option value="gain" ${profile.goalType === "gain" ? "selected" : ""}>gain</option></select></label><div class="notice">${guidance.ok ? `Automatic estimate: ${fmt(guidance.target)} kcal/day${guidance.weeks ? ` · roughly ${fmt(guidance.weeks)} weeks` : ""}.` : html(guidance.reason)}</div><button class="btn-primary" type="submit">save plan</button></form><section class="section"><p class="label">snack plan</p>${this.snackBudgetForm()}</section><section class="section"><p class="label">services & data</p><div class="card settings"><button class="setting" data-action="open-ai"><span>AI bridge</span><span class="tiny">copy / paste</span></button>${sync}<button class="setting" data-action="open-backup"><span>backup & restore</span><span class="tiny">portable JSON</span></button><button class="setting" data-action="onboard"><span>edit baseline</span><span class="tiny">profile setup</span></button></div></section>`;
   }
@@ -606,6 +606,9 @@ export class DaybookApp {
   private submitOnboarding(data: FormData): void {
     Object.assign(this.state.profile, { onboardingComplete: true, age: getNumber(data, "age"), heightIn: getNumber(data, "heightIn"), weightLb: getNumber(data, "weightLb"), goalWeightLb: getNumber(data, "goalWeightLb"), activityPAL: getNumber(data, "activity") ?? 1.6, sexForEquation: data.get("sex") });
     if (!this.state.weights.length && this.state.profile.weightLb) this.addWeight(this.state.prefs.date, this.state.profile.weightLb);
+    // The plan's starting weight is recorded once (DEC-05). Revisiting these basics later
+    // corrects the body baseline without rewriting how far the user has already come.
+    this.state.profile.startWeightLb ??= this.state.profile.weightLb ?? startWeight(this.state);
     this.save("saved locally");
   }
 
@@ -668,7 +671,7 @@ export class DaybookApp {
     const enabled = data.get("enabled") === "on";
     const calories = Math.round(getNumber(data, "calories") ?? this.state.prefs.protectedSnackCalories);
     if (enabled && calories < 1) throw new Error("Save at least 1 calorie for snacks.");
-    const guide = dailyCalorieGuide(this.state.profile);
+    const guide = dailyCalorieGuide(planProfile(this.state));
     if (enabled && guide && calories >= guide) throw new Error(`Save fewer than ${fmt(guide)} calories for snacks.`);
     this.state.prefs.protectedSnackBudgetEnabled = enabled;
     this.state.prefs.protectedSnackCalories = Math.max(1, calories);

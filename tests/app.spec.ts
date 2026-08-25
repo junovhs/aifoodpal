@@ -11,6 +11,57 @@ const openSettings = (root: HTMLElement): void => {
   root.querySelector<HTMLElement>('[data-action="view"][data-view="settings"]')!.click();
 };
 
+describe("weight sourcing", () => {
+  it("shows real goal progress from the recorded start and quotes one weight everywhere", () => {
+    const today = isoDate();
+    const state = createState(today);
+    Object.assign(state.profile, {
+      onboardingComplete: true, age: 35, sexForEquation: "female", heightIn: 66,
+      // A stale onboarding weight that disagrees with the newest check-in.
+      weightLb: 240, startWeightLb: 210, goalWeightLb: 160, activityPAL: 1.2, rateLbWeek: 1,
+    });
+    state.weights.push({ id: "w1", date: shiftDate(today, -2), weightLb: 196, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+    const root = document.createElement("main");
+    new DaybookApp(root, { load: () => state, save: vi.fn() }).start();
+
+    root.querySelector<HTMLElement>('[data-action="view"][data-view="trend"]')!.click();
+    const ring = root.querySelector(".goal-ring")?.textContent ?? "";
+    expect(ring).not.toContain("0%");
+    expect(ring).toContain("28%");
+    expect(root.querySelector(".goal-band")?.textContent).toContain("36");
+
+    // The Settings estimate must be computed from the check-in weight, not the stale 240.
+    openSettings(root);
+    const notice = root.querySelector(".notice")?.textContent ?? "";
+    const fromCheckIn = calorieGuidance({ ...state.profile, weightLb: 196 }).target!;
+    const fromOnboarding = calorieGuidance({ ...state.profile, weightLb: 240 }).target!;
+    expect(Math.round(fromCheckIn)).not.toBe(Math.round(fromOnboarding));
+    expect(notice.replace(/,/g, "")).toContain(String(Math.round(fromCheckIn)));
+  });
+
+  it("keeps goal progress steady when the oldest check-in is deleted", () => {
+    const today = isoDate();
+    const state = createState(today);
+    Object.assign(state.profile, {
+      onboardingComplete: true, age: 35, sexForEquation: "female", heightIn: 66,
+      weightLb: 196, startWeightLb: 210, goalWeightLb: 160, activityPAL: 1.2, rateLbWeek: 1,
+    });
+    const stamp = new Date().toISOString();
+    state.weights.push(
+      { id: "w1", date: shiftDate(today, -20), weightLb: 202, createdAt: stamp, updatedAt: stamp },
+      { id: "w2", date: shiftDate(today, -2), weightLb: 196, createdAt: stamp, updatedAt: stamp },
+    );
+    const root = document.createElement("main");
+    new DaybookApp(root, { load: () => state, save: vi.fn() }).start();
+    root.querySelector<HTMLElement>('[data-action="view"][data-view="trend"]')!.click();
+    const before = root.querySelector(".goal-ring")?.textContent;
+
+    root.querySelector<HTMLElement>('[data-action="request-delete-weight"][data-id="w1"]')!.click();
+    root.querySelector<HTMLElement>('[data-action="confirm-delete-weight"]')!.click();
+    expect(root.querySelector(".goal-ring")?.textContent).toBe(before);
+  });
+});
+
 describe("calorie trends and exercise", () => {
   it("shows recent averages and saves an exercise that contributes to the forecast", () => {
     const today = isoDate();

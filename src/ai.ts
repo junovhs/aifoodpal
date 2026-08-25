@@ -1,6 +1,6 @@
 import { backfillEntryNutrition } from "./storage";
 import { createEntry, isoDate, normalizeFood, normalizePeriod, type AppState, type Food, type FoodInput, type GoalType, type PaceMode, type Profile } from "./model";
-import { latestWeight, nutritionTargets, shiftDate } from "./nutrition";
+import { nutritionTargets, planProfile, shiftDate } from "./nutrition";
 
 type UpsertFoodOperation = { type: "upsertFood"; food: FoodInput };
 type AddEntryOperation = { type: "addEntry"; entry: { date?: string; period?: string; servings?: number; foodId?: string; food?: FoodInput } };
@@ -168,7 +168,7 @@ export const buildAiPrompt = (state: AppState, request: string): string => {
   const context = {
     currentDate: isoDate(),
     selectedDate: state.prefs.date,
-    profile: { ...state.profile, weightLb: latestWeight(state), dailyNutritionGuide: nutritionTargets(state.profile) },
+    profile: { ...planProfile(state), dailyNutritionGuide: nutritionTargets(planProfile(state)) },
     library: state.foods,
     recentEntries: state.entries.filter((entry) => entry.date >= start && entry.date <= state.prefs.date),
   };

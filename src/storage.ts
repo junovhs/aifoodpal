@@ -6,6 +6,7 @@ import {
   normalizePeriod,
   type AppState,
 } from "./model";
+import { startWeight } from "./nutrition";
 
 export const STORAGE_KEY = "daybook.prototype.v1";
 
@@ -38,6 +39,9 @@ export const migrateState = (value: unknown): AppState => {
     exercises: Array.isArray(input.exercises) ? input.exercises : [],
   };
   backfillEntryNutrition(state);
+  // States saved before the plan recorded its own starting weight (DEC-05) infer one once,
+  // here, so the running app only ever reads a stored fact.
+  state.profile.startWeightLb ??= startWeight(state);
   return state;
 };
 

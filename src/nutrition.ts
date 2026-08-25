@@ -161,6 +161,22 @@ export const latestWeight = (state: AppState): number | null => {
   return latest?.weightLb ?? state.profile.weightLb;
 };
 
+/**
+ * The profile every calorie calculation must read (DEC-05). Body weight always comes
+ * from the newest check-in, so guidance and projection can never quote different weights.
+ */
+export const planProfile = (state: AppState): Profile => ({ ...state.profile, weightLb: latestWeight(state) });
+
+/**
+ * The weight the plan started from. A recorded fact, so deleting an old check-in cannot
+ * rewrite how much progress the user has made. Falls back only for states predating the field.
+ */
+export const startWeight = (state: AppState): number | null =>
+  state.profile.startWeightLb
+  ?? [...state.weights].sort((left, right) => left.date.localeCompare(right.date))[0]?.weightLb
+  ?? state.profile.weightLb
+  ?? latestWeight(state);
+
 /** Percentage traveled from a starting check-in toward a goal, never rewarding movement away. */
 export const goalProgressPercent = (start: number, current: number, goal: number): number => {
   const total = goal - start;

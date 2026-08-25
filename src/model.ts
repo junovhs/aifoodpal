@@ -115,6 +115,8 @@ export interface Profile {
   heightIn: number | null;
   weightLb: number | null;
   activityPAL: number;
+  /** Weight the plan started from. Recorded when the plan is created, never inferred from check-in history (DEC-05). */
+  startWeightLb: number | null;
   goalType: GoalType;
   goalWeightLb: number | null;
   rateLbWeek: number;
@@ -369,6 +371,7 @@ export const createState = (date = isoDate()): AppState => {
       heightIn: null,
       weightLb: null,
       activityPAL: 1.6,
+      startWeightLb: null,
       goalType: "lose",
       goalWeightLb: null,
       rateLbWeek: 1,

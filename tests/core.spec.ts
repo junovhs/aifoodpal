@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { applyAiResponse, buildAiPrompt, buildFoodAiPrompt, importFoodDraft, parseAiResponse } from "../src/ai";
 import { createEntry, createQuickCalorieEntry, createState, moveDiaryEntry, normalizeFood, protectedSnackBudget, removeFoodFromLibrary, type AppState } from "../src/model";
-import { calorieGuidance, calorieTrend, exerciseCalories, goalDateFromPace, goalProgressPercent, nutritionTargets, totalsFor, weightProjection } from "../src/nutrition";
-import { exportBackup, parseBackup } from "../src/storage";
+import { calorieGuidance, calorieTrend, exerciseCalories, goalDateFromPace, goalProgressPercent, nutritionTargets, planProfile, startWeight, totalsFor, weightProjection } from "../src/nutrition";
+import { exportBackup, migrateState, parseBackup } from "../src/storage";
 import { calendarGrid, formatMonth, shiftMonth } from "../src/calendar";
 import { createComboFood } from "../src/combos";
 import { convertAmount, normalizeUnit, servingMultiplier, splitTrailingQuantity } from "../src/units";
@@ -30,6 +30,55 @@ describe("nutrition domain", () => {
     expect(goalProgressPercent(150, 145, 170)).toBe(0);
     expect(goalProgressPercent(150, 160, 170)).toBe(50);
     expect(goalProgressPercent(190, 155, 160)).toBe(100);
+  });
+
+  it("measures progress from the recorded starting weight, not the oldest surviving check-in", () => {
+    const state = readyState();
+    state.profile.startWeightLb = 210;
+    state.profile.goalWeightLb = 160;
+    state.weights.push(
+      { id: "w1", date: "2026-08-10", weightLb: 202, createdAt: "", updatedAt: "" },
+      { id: "w2", date: "2026-08-23", weightLb: 196, createdAt: "", updatedAt: "" },
+    );
+    const before = goalProgressPercent(startWeight(state)!, 196, 160);
+    expect(before).toBeCloseTo(28, 0);
+
+    // Deleting the oldest check-in must not rewrite how far the user has come.
+    state.weights = state.weights.filter((weight) => weight.id !== "w1");
+    expect(goalProgressPercent(startWeight(state)!, 196, 160)).toBeCloseTo(before, 5);
+  });
+
+  it("gives a single check-in real progress instead of pinning it at zero", () => {
+    const state = readyState();
+    state.profile.startWeightLb = 210;
+    state.weights.push({ id: "w1", date: "2026-08-23", weightLb: 196, createdAt: "", updatedAt: "" });
+    expect(goalProgressPercent(startWeight(state)!, 196, 160)).toBeGreaterThan(0);
+  });
+
+  it("answers every calorie calculation from the newest check-in rather than the onboarding weight", () => {
+    const state = readyState();
+    state.profile.weightLb = 240;
+    state.weights.push({ id: "w1", date: "2026-08-23", weightLb: 180, createdAt: "", updatedAt: "" });
+    expect(planProfile(state).weightLb).toBe(180);
+    expect(calorieGuidance(planProfile(state)).target).toBe(calorieGuidance({ ...state.profile, weightLb: 180 }).target);
+    expect(weightProjection(state, "2026-08-23")).toBe(weightProjection(state, "2026-08-23"));
+  });
+
+  it("seeds a missing starting weight once, preferring the earliest check-in", () => {
+    const seeded = migrateState({ ...createState("2026-08-17"), weights: [
+      { id: "w1", date: "2026-08-01", weightLb: 205, createdAt: "", updatedAt: "" },
+      { id: "w2", date: "2026-08-20", weightLb: 198, createdAt: "", updatedAt: "" },
+    ] });
+    expect(seeded.profile.startWeightLb).toBe(205);
+
+    const state = createState("2026-08-17");
+    state.profile.weightLb = 190;
+    expect(migrateState(state).profile.startWeightLb).toBe(190);
+
+    const recorded = createState("2026-08-17");
+    recorded.profile.startWeightLb = 220;
+    recorded.profile.weightLb = 190;
+    expect(migrateState(recorded).profile.startWeightLb).toBe(220);
   });
 
   it("turns a saved weekly pace into a deterministic goal date", () => {
