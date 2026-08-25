@@ -28,6 +28,7 @@ type Modal = FoodModal | { kind: "combo"; error?: string } | { kind: "quick"; ca
 
 const html = (value: unknown): string => String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;");
 const fmt = (value: number | null | undefined, digits = 0): string => value == null ? "?" : new Intl.NumberFormat(undefined, { maximumFractionDigits: digits }).format(value);
+const searchKey = (value: string): string => value.normalize("NFKD").replace(/\p{Diacritic}/gu, "").toLocaleLowerCase().replace(/\s+/g, " ").trim();
 const field = (label: string, name: string, value: unknown, type = "number", attrs = ""): string => `<label class="field"><span>${label}</span><input name="${name}" type="${type}" value="${html(value)}" ${attrs}></label>`;
 const getNumber = (data: FormData, key: string): number | null => { const value = data.get(key); if (value === null || value === "") return null; const number = Number(value); return Number.isFinite(number) ? number : null; };
 const measurementList = (): string => `<datalist id="measurement-units">${UNIT_OPTIONS.map((unit) => `<option value="${unit.value}">${unit.label}</option>`).join("")}</datalist>`;
@@ -301,8 +302,32 @@ export class DaybookApp {
   }
 
   private library(): string {
-    const cards = [...this.state.foods].sort((a, b) => a.name.localeCompare(b.name)).map((food) => `<div class="library-card"><div class="library-symbol">${icon(food.recipe ? "ChefHat" : "Utensils")}</div><div class="grow"><div class="library-name">${html(food.name)}${food.recipe ? `<span class="recipe-badge">Recipe</span>` : ""}</div><div class="tiny">${html(food.brand || food.serving.description)} · ${fmt(food.nutrition.calories)} kcal${food.recipe ? ` · ${food.recipe.ingredients.length} ingredients` : ""}</div></div><div class="row library-actions"><button class="tiny-btn btn-icon" data-action="log" data-id="${food.id}">${icon("Plus")}<span>Log</span></button><button class="icon-btn subtle" data-action="edit-food" data-id="${food.id}" aria-label="Edit ${html(food.name)}">${icon("Pencil")}</button><button class="icon-btn danger" data-action="request-delete-food" data-id="${food.id}" aria-label="Delete ${html(food.name)} from library">${icon("Trash2")}</button></div></div>`).join("");
-    return `<div class="head"><div><span class="eyebrow">Saved foods</span><h1 class="title">Food library</h1><p class="subtitle">Reusable foods and portions, ready for your next meal.</p></div><div class="head-actions"><button class="btn btn-icon" data-action="build-combo" ${this.state.foods.length < 2 ? "disabled" : ""}>${icon("ListPlus")}<span>Build combo</span></button><button class="btn-primary btn-icon" data-action="new-food">${icon("Plus")}<span>New food</span></button></div></div>${cards || `<div class="empty empty-rich"><span class="empty-icon">${icon("BookOpen")}</span><strong>Your library is ready</strong><span>Create a food here, or ask an AI to structure your first meal.</span><button class="btn-primary btn-icon" data-action="new-food">${icon("Plus")}<span>Create food</span></button></div>`}`;
+    const foods = [...this.state.foods].sort((a, b) => searchKey(a.name).localeCompare(searchKey(b.name)) || searchKey(a.brand ?? "").localeCompare(searchKey(b.brand ?? "")) || a.id.localeCompare(b.id));
+    const cards = foods.map((food) => {
+      const metadata = [food.brand?.trim(), food.serving.description, `${fmt(food.nutrition.calories)} kcal`, food.recipe ? `${food.recipe.ingredients.length} ingredients` : null].filter(Boolean).map((part) => html(part)).join(" · ");
+      const searchable = searchKey([food.name, food.brand, food.serving.description].filter(Boolean).join(" "));
+      return `<div class="library-card" data-library-card data-search="${html(searchable)}"><div class="library-symbol">${icon(food.recipe ? "ChefHat" : "Utensils")}</div><div class="grow"><div class="library-name">${html(food.name)}${food.recipe ? `<span class="recipe-badge">Recipe</span>` : ""}</div><div class="tiny library-meta">${metadata}</div></div><div class="row library-actions"><button class="tiny-btn btn-icon" data-action="log" data-id="${food.id}">${icon("Plus")}<span>Log</span></button><button class="icon-btn subtle" data-action="edit-food" data-id="${food.id}" aria-label="Edit ${html(food.name)}">${icon("Pencil")}</button><button class="icon-btn danger" data-action="request-delete-food" data-id="${food.id}" aria-label="Delete ${html(food.name)} from library">${icon("Trash2")}</button></div></div>`;
+    }).join("");
+    const count = foods.length === 1 ? "1 food" : `${foods.length} foods`;
+    const search = foods.length ? `<div class="library-tools"><div class="library-search">${icon("Search")}<label class="sr-only" for="food-library-search">Search saved foods</label><input id="food-library-search" class="library-search-input" data-library-search type="search" placeholder="Search foods, brands, or servings" autocomplete="off"><button class="library-search-clear" type="button" data-action="clear-library-search" aria-label="Clear food search" hidden>${icon("X")}</button></div><span class="library-count" data-library-count aria-live="polite">${count}</span></div>` : "";
+    const noResults = `<div class="empty library-no-results" data-library-empty hidden><strong>No matching foods</strong><span>Try a food name, brand, or serving.</span></div>`;
+    return `<div class="head"><div><span class="eyebrow">Saved foods</span><h1 class="title">Food library</h1><p class="subtitle">Reusable foods and portions, ready for your next meal.</p></div><div class="head-actions"><button class="btn btn-icon" data-action="build-combo" ${this.state.foods.length < 2 ? "disabled" : ""}>${icon("ListPlus")}<span>Build combo</span></button><button class="btn-primary btn-icon" data-action="new-food">${icon("Plus")}<span>New food</span></button></div></div>${search}${cards ? `<div class="library-list">${cards}</div>${noResults}` : `<div class="empty empty-rich"><span class="empty-icon">${icon("BookOpen")}</span><strong>Your library is ready</strong><span>Create a food here, or ask an AI to structure your first meal.</span><button class="btn-primary btn-icon" data-action="new-food">${icon("Plus")}<span>Create food</span></button></div>`}`;
+  }
+
+  private filterLibrary(query: string): void {
+    const key = searchKey(query);
+    const cards = [...this.root.querySelectorAll<HTMLElement>("[data-library-card]")];
+    let matches = 0;
+    for (const card of cards) {
+      card.hidden = Boolean(key) && !searchKey(card.dataset.search ?? "").includes(key);
+      if (!card.hidden) matches += 1;
+    }
+    const count = this.root.querySelector<HTMLElement>("[data-library-count]");
+    if (count) count.textContent = key ? `${matches} of ${cards.length} foods` : cards.length === 1 ? "1 food" : `${cards.length} foods`;
+    const empty = this.root.querySelector<HTMLElement>("[data-library-empty]");
+    if (empty) empty.hidden = matches !== 0;
+    const clear = this.root.querySelector<HTMLButtonElement>('[data-action="clear-library-search"]');
+    if (clear) clear.hidden = !key;
   }
 
   private trend(): string {
@@ -436,6 +461,10 @@ export class DaybookApp {
     const button = (event.target as Element).closest<HTMLElement>("[data-action]");
     if (!button) return;
     const action = button.dataset.action;
+    if (action === "clear-library-search") {
+      const input = this.root.querySelector<HTMLInputElement>("[data-library-search]");
+      if (input) { input.value = ""; this.filterLibrary(""); input.focus(); }
+    }
     if (action === "view") { this.view = button.dataset.view as View; this.mealPeriod = undefined; if (this.view === "calendar") this.calendarMonth = this.state.prefs.date.slice(0, 7); this.render(); }
     if (action === "open-meal" && PERIODS.includes(button.dataset.period as Period)) { this.mealPeriod = button.dataset.period as Period; this.render(); }
     if (action === "back-today") { this.mealPeriod = undefined; this.render(); }
@@ -513,6 +542,7 @@ export class DaybookApp {
 
   private onInput(event: Event): void {
     const target = event.target as HTMLInputElement;
+    if (target.matches("[data-library-search]")) { this.filterLibrary(target.value); return; }
     if (!target.matches("[data-quick-calories]") || this.modal?.kind !== "quick") return;
     this.modal.calories = Math.max(0, Math.round(Number(target.value) || 0));
     const label = this.root.querySelector<HTMLElement>(".quick-confirm span");

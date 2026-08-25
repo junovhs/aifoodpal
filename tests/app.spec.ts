@@ -381,6 +381,43 @@ describe("food photo capture", () => {
   });
 });
 
+describe("food library", () => {
+  it("sorts consistently and filters by name, brand, or serving", () => {
+    const state = createState("2026-08-20");
+    state.profile.onboardingComplete = true;
+    state.foods.push(
+      normalizeFood({ id: "food-3", name: "zucchini bowl", brand: "Garden Co", serving: { amount: 2, unit: "cup" }, nutrition: { calories: 240 } }),
+      normalizeFood({ id: "food-1", name: "Caramel Pumpkin Brûlée Latte", brand: "Dutch Bros", serving: { amount: 1, unit: "container" }, nutrition: { calories: 340 } }),
+      normalizeFood({ id: "food-2", name: "Almond croissant", brand: "Private Selection", serving: { amount: 1, unit: "piece" }, nutrition: { calories: 400 } }),
+    );
+    const root = document.createElement("main");
+    new DaybookApp(root, { load: () => state, save: vi.fn() }).start();
+    root.querySelector<HTMLElement>('[data-action="view"][data-view="library"]')!.click();
+
+    const names = () => [...root.querySelectorAll<HTMLElement>("[data-library-card]:not([hidden]) .library-name")].map((node) => node.childNodes[0]?.textContent);
+    expect(names()).toEqual(["Almond croissant", "Caramel Pumpkin Brûlée Latte", "zucchini bowl"]);
+    expect(root.querySelector("[data-library-card]")?.textContent).toContain("Private Selection · 1 piece · 400 kcal");
+
+    const search = root.querySelector<HTMLInputElement>("[data-library-search]")!;
+    search.value = "brulee";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(names()).toEqual(["Caramel Pumpkin Brûlée Latte"]);
+    expect(root.querySelector("[data-library-count]")?.textContent).toBe("1 of 3 foods");
+
+    search.value = "cup";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(names()).toEqual(["zucchini bowl"]);
+
+    search.value = "missing";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(root.querySelector<HTMLElement>("[data-library-empty]")?.hidden).toBe(false);
+
+    root.querySelector<HTMLButtonElement>('[data-action="clear-library-search"]')!.click();
+    expect(search.value).toBe("");
+    expect(names()).toHaveLength(3);
+  });
+});
+
 describe("Today layout by viewport", () => {
   const realMatchMedia = window.matchMedia;
   afterEach(() => { window.matchMedia = realMatchMedia; });
