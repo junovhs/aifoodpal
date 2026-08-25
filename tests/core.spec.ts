@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { applyAiResponse, buildAiPrompt, buildFoodAiPrompt, importFoodDraft, parseAiResponse } from "../src/ai";
 import { createEntry, createQuickCalorieEntry, createState, moveDiaryEntry, normalizeFood, protectedSnackBudget, removeFoodFromLibrary, type AppState } from "../src/model";
-import { calorieGuidance, calorieTrend, exerciseCalories, goalDateFromPace, goalProgressPercent, maintenanceCalories, nutritionTargets, paceFromDailyGuide, planProfile, startWeight, totalsFor, weightProjection } from "../src/nutrition";
+import { CALORIE_FLOOR, calorieGuidance, calorieTrend, exerciseCalories, goalDateFromPace, goalProgressPercent, maintenanceCalories, nutritionTargets, paceFromDailyGuide, planProfile, startWeight, totalsFor, weekBalance, weightProjection } from "../src/nutrition";
 import { exportBackup, migrateState, parseBackup } from "../src/storage";
 import { calendarGrid, formatMonth, shiftMonth } from "../src/calendar";
 import { createComboFood } from "../src/combos";
@@ -22,6 +22,133 @@ const readyState = () => {
   });
   return state;
 };
+
+const ANCHOR = "2026-08-25";
+const WINDOW = ["2026-08-18", "2026-08-19", "2026-08-20", "2026-08-21", "2026-08-22", "2026-08-23", "2026-08-24"];
+
+/** A plan with a complete body baseline and a check-in, ready to measure a week against. */
+const balanceState = (dailyCalories: (number | null)[], over: Partial<AppState["profile"]> = {}) => {
+  const state = readyState();
+  Object.assign(state.profile, { startWeightLb: 196, goalWeightLb: 160, rateLbWeek: 1.5, ...over });
+  state.weights.push({ id: "w1", date: "2026-08-24", weightLb: 196, createdAt: "", updatedAt: "" });
+  dailyCalories.forEach((calories, index) => {
+    if (calories !== null) state.entries.push(createQuickCalorieEntry(calories, WINDOW[index]!, "dinner"));
+  });
+  return state;
+};
+
+describe("rolling week balance", () => {
+  it("reads a heavy day as calories borrowed from the week, not a failed day", () => {
+    const state = balanceState([1232, 1768, 1677, 1738, 1784, 2442, 1720]);
+    state.profile.manualDailyGuide = null;
+    // Pin the guide the real user had, expressed the way the plan now stores it (DEC-04).
+    state.profile.rateLbWeek = paceFromDailyGuide(planProfile(state), 1600)!;
+    const balance = weekBalance(state, ANCHOR)!;
+
+    expect(Math.round(balance.guide)).toBe(1600);
+    expect(balance.loggedDays).toBe(7);
+    expect(balance.loggedCalories).toBe(12361);
+    expect(Math.round(balance.budgetedCalories)).toBe(11200);
+    expect(Math.round(balance.borrowedCalories)).toBe(1161);
+    expect(balance.savedCalories).toBe(0);
+    // The whole answer: spread the overage across the coming week.
+    expect(Math.round(balance.catchUpDailyGuide)).toBe(1434);
+    expect(balance.catchUpReachable).toBe(true);
+    expect(balance.repaymentDays).toBe(7);
+  });
+
+  it("moves the goal date instead of demanding a week below the calorie floor", () => {
+    const state = balanceState([2300, 2300, 2300, 2300, 2300, 2300, 2300]);
+    state.profile.rateLbWeek = paceFromDailyGuide(planProfile(state), 1600)!;
+    const balance = weekBalance(state, ANCHOR)!;
+
+    expect(Math.round(balance.borrowedCalories)).toBe(4900);
+    expect(balance.catchUpDailyGuide).toBeLessThan(CALORIE_FLOOR);
+    expect(balance.catchUpReachable).toBe(false);
+
+    // The date moves, honestly and in the direction the week actually points.
+    expect(balance.observedGoalDate!.localeCompare(balance.planGoalDate!)).toBeGreaterThan(0);
+    expect(balance.goalDateDriftDays).toBeGreaterThan(0);
+
+    // Holding the original date takes a lower average, sustained for the whole remaining span.
+    expect(balance.holdPlanDays).toBeGreaterThan(0);
+    expect(balance.holdPlanDailyGuide).toBeLessThan(2300);
+  });
+
+  it("reports an even week and an unmoved goal date when the plan is followed exactly", () => {
+    const state = balanceState([]);
+    const guide = Math.round(calorieGuidance(planProfile(state)).target!);
+    for (const date of WINDOW) state.entries.push(createQuickCalorieEntry(guide, date, "dinner"));
+    const balance = weekBalance(state, ANCHOR)!;
+
+    // Entries store whole calories, so following the plan exactly still leaves under a
+    // calorie a day of rounding. The week is even for every purpose the user sees.
+    expect(balance.borrowedCalories).toBeLessThan(7);
+    expect(balance.savedCalories).toBeLessThan(7);
+    expect(Math.round(balance.catchUpDailyGuide)).toBe(guide);
+    expect(balance.catchUpReachable).toBe(true);
+    // Eating the plan produces the plan's own pace, so the two dates agree. Entries store whole
+    // calories and goal dates are whole days, so a months-out date can sit a day or two either
+    // side; what matters is that following the plan never reports the date as moving.
+    expect(balance.observedWeeklyChangeLb).toBeCloseTo(state.profile.rateLbWeek, 1);
+    expect(Math.abs(balance.goalDateDriftDays!)).toBeLessThanOrEqual(2);
+  });
+
+  it("counts a week under the plan as calories saved rather than a reward to spend", () => {
+    const state = balanceState([1300, 1300, 1300, 1300, 1300, 1300, 1300]);
+    state.profile.rateLbWeek = paceFromDailyGuide(planProfile(state), 1600)!;
+    const balance = weekBalance(state, ANCHOR)!;
+
+    expect(balance.borrowedCalories).toBe(0);
+    expect(Math.round(balance.savedCalories)).toBe(2100);
+    // Nothing to repay, so the coming week's guide is simply the plan's.
+    expect(Math.round(balance.catchUpDailyGuide)).toBe(1600);
+    expect(balance.observedGoalDate!.localeCompare(balance.planGoalDate!)).toBeLessThan(0);
+    expect(balance.goalDateDriftDays).toBeLessThan(0);
+  });
+
+  it("excludes unlogged days and the partly logged current day instead of scoring them as zero", () => {
+    const state = balanceState([1900, null, null, 1900, null, null, 1900]);
+    state.profile.rateLbWeek = paceFromDailyGuide(planProfile(state), 1600)!;
+    // A big current day is still in progress and must not be counted as evidence.
+    state.entries.push(createQuickCalorieEntry(4000, ANCHOR, "dinner"));
+    const balance = weekBalance(state, ANCHOR)!;
+
+    expect(balance.loggedDays).toBe(3);
+    expect(balance.loggedCalories).toBe(5700);
+    expect(Math.round(balance.budgetedCalories)).toBe(4800);
+    expect(Math.round(balance.borrowedCalories)).toBe(900);
+    expect(balance.windowStart).toBe("2026-08-18");
+    expect(balance.windowEnd).toBe("2026-08-24");
+  });
+
+  it("infers nothing about weight from a manual guide with no body baseline", () => {
+    const state = balanceState([1900, 1900, 1900, 1900, 1900, 1900, 1900]);
+    Object.assign(state.profile, { sexForEquation: null, manualDailyGuide: 1600 });
+    const balance = weekBalance(state, ANCHOR)!;
+
+    // The week is still measurable against the guide the user set.
+    expect(balance.guide).toBe(1600);
+    expect(Math.round(balance.borrowedCalories)).toBe(2100);
+    // But nothing about weight can honestly be claimed without a maintenance figure.
+    expect(balance.observedWeeklyChangeLb).toBeNull();
+    expect(balance.observedGoalDate).toBeNull();
+    expect(balance.holdPlanDailyGuide).toBeNull();
+  });
+
+  it("returns nothing to steer by when there is no plan guide", () => {
+    const bare = createState("2026-08-17");
+    expect(weekBalance(bare, ANCHOR)).toBeNull();
+  });
+
+  it("holds an empty week at zero rather than inventing a debt", () => {
+    const balance = weekBalance(balanceState([]), ANCHOR)!;
+    expect(balance.loggedDays).toBe(0);
+    expect(balance.borrowedCalories).toBe(0);
+    expect(balance.savedCalories).toBe(0);
+    expect(Math.round(balance.catchUpDailyGuide)).toBe(Math.round(balance.guide));
+  });
+});
 
 describe("nutrition domain", () => {
   it("counts only movement toward a weight goal as progress", () => {

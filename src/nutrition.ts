@@ -321,3 +321,120 @@ export const weightProjection = (state: AppState, anchor = isoDate()): WeightPro
     goalDate,
   };
 };
+
+const REPAYMENT_DAYS = 7;
+
+export interface WeekBalance {
+  /** The plan's daily calorie guide the window is measured against. */
+  guide: number;
+  windowStart: string;
+  windowEnd: string;
+  /** Days in the window with any food logged. Unlogged days are excluded, never counted as zero. */
+  loggedDays: number;
+  loggedCalories: number;
+  /** What the plan allowed across the logged days. */
+  budgetedCalories: number;
+  /** Calories eaten above the plan across the window. Zero when the week is even or under. */
+  borrowedCalories: number;
+  /** Calories left unspent across the window. Zero when the week is over. */
+  savedCalories: number;
+  /** Days the repayment is spread across. */
+  repaymentDays: number;
+  /** The daily average over the coming week that returns the balance to even. */
+  catchUpDailyGuide: number;
+  /** False when repaying inside the coming week would mean eating below the calorie floor. */
+  catchUpReachable: boolean;
+  /**
+    * Weekly change the window's own intake and exercise imply; positive means losing. Null when
+    * there is no body baseline, because nothing about weight can honestly be inferred without one.
+    */
+  observedWeeklyChangeLb: number | null;
+  /** The goal date the saved plan points to. */
+  planGoalDate: string | null;
+  /** The goal date the window's own behaviour points to. */
+  observedGoalDate: string | null;
+  /** Days the observed date sits later than the plan date. Negative means ahead of plan. */
+  goalDateDriftDays: number | null;
+  /**
+   * The daily average, sustained for the whole remaining span, that still lands on the plan
+   * date. Null when there is no plan date to hold or the span has run out. It can fall below
+   * the calorie floor, which is the honest signal that the original date is out of reach.
+   */
+  holdPlanDailyGuide: number | null;
+  /** The span holdPlanDailyGuide must be sustained across. */
+  holdPlanDays: number | null;
+}
+
+/**
+ * The rolling seven-day balance (DEC-06). Adherence is a week, not a verdict on a day: a heavy
+ * day borrows from the week and is answered with the smallest daily average that repays it,
+ * and when the week cannot repay it the goal date moves rather than the user failing.
+ */
+export const weekBalance = (state: AppState, anchor = isoDate()): WeekBalance | null => {
+  const profile = planProfile(state);
+  const guide = dailyCalorieGuide(profile);
+  const current = latestWeight(state);
+  if (!guide || current == null) return null;
+
+  // A partially logged current day is not evidence about a full day, matching weightProjection.
+  const windowEnd = shiftDate(anchor, -1);
+  const windowStart = shiftDate(windowEnd, -(PROJECTION_WINDOW_DAYS - 1));
+  const dates = Array.from({ length: PROJECTION_WINDOW_DAYS }, (_, index) => shiftDate(windowStart, index));
+  const logged = dates.filter((date) => state.entries.some((entry) => entry.date === date));
+  const loggedCalories = logged.reduce((sum, date) => sum + totalsFor(state, date).calories, 0);
+  const budgetedCalories = guide * logged.length;
+  const difference = loggedCalories - budgetedCalories;
+  const borrowedCalories = Math.max(0, difference);
+  const savedCalories = Math.max(0, -difference);
+  const catchUpDailyGuide = guide - borrowedCalories / REPAYMENT_DAYS;
+
+  const exerciseTotal = state.exercises
+    .filter((entry) => entry.date >= windowStart && entry.date <= windowEnd)
+    .reduce((sum, entry) => sum + exerciseCalories(entry.kind, entry.minutes, current), 0);
+  // Without a body baseline there is no maintenance to measure intake against, so the window
+  // says nothing about weight. A guide can still exist here as a legacy manual figure, and
+  // inferring a pace from it would be inventing evidence.
+  const maintenance = maintenanceCalories(profile);
+  const averageIntake = logged.length ? loggedCalories / logged.length : guide;
+  const averageExercise = logged.length ? exerciseTotal / logged.length : 0;
+  const observedWeeklyChangeLb = maintenance === null
+    ? null
+    : (maintenance + averageExercise - averageIntake) * 7 / 3500;
+
+  const goal = profile.goalWeightLb;
+  const planGoalDate = goal == null ? null : goalDateFromPace(current, goal, profile.rateLbWeek, anchor);
+  const observedGoalDate = goal == null || observedWeeklyChangeLb === null
+    || Math.abs(observedWeeklyChangeLb) < MIN_STABLE_GOAL_RATE_LB_WEEK
+    || (goal - current) * -observedWeeklyChangeLb <= 0
+    ? null
+    : goalDateFromPace(current, goal, Math.abs(observedWeeklyChangeLb), anchor);
+
+  const dayGap = (from: string, to: string): number =>
+    Math.round((parseLocalDate(to).getTime() - parseLocalDate(from).getTime()) / 86400000);
+  const holdPlanDays = planGoalDate ? dayGap(anchor, planGoalDate) : null;
+  // The average that actually holds the date is the one sustained across the whole remaining
+  // span. A figure held for a few weeks and then abandoned does not hold anything.
+  const holdPlanDailyGuide = goal != null && maintenance !== null && holdPlanDays != null && holdPlanDays > 0
+    ? maintenance + averageExercise - Math.abs(current - goal) * 3500 / holdPlanDays
+    : null;
+
+  return {
+    guide,
+    windowStart,
+    windowEnd,
+    loggedDays: logged.length,
+    loggedCalories,
+    budgetedCalories,
+    borrowedCalories,
+    savedCalories,
+    repaymentDays: REPAYMENT_DAYS,
+    catchUpDailyGuide,
+    catchUpReachable: catchUpDailyGuide >= CALORIE_FLOOR,
+    observedWeeklyChangeLb,
+    planGoalDate,
+    observedGoalDate,
+    goalDateDriftDays: planGoalDate && observedGoalDate ? dayGap(planGoalDate, observedGoalDate) : null,
+    holdPlanDailyGuide,
+    holdPlanDays,
+  };
+};
