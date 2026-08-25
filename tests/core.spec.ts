@@ -226,11 +226,46 @@ describe("nutrition domain", () => {
     expect(migrateState(bare).profile.manualDailyGuide).toBe(1800);
   });
 
-  it("holds the calorie floor and reports that the pace is limited by it", () => {
+  it("floors the daily guide by the sex the equation uses, and at the neutral floor without one", () => {
+    const base = { ...readyState().profile, rateLbWeek: 5 };
+    expect(calorieGuidance({ ...base, sexForEquation: "female" }).floor).toBe(1200);
+    expect(calorieGuidance({ ...base, sexForEquation: "female" }).target).toBe(1200);
+    expect(calorieGuidance({ ...base, sexForEquation: "male" }).floor).toBe(1500);
+    expect(calorieGuidance({ ...base, sexForEquation: "male" }).target).toBe(1500);
+    // With no sex there is no convention to apply, so the older neutral floor stands.
+    const neutral = calorieGuidance({ ...base, sexForEquation: null });
+    expect(neutral.floor).toBe(1000);
+    expect(neutral.ok).toBe(false);
+  });
+
+  it("caps the pace at the fastest one the floor allows instead of clamping the calories alone", () => {
     const profile = { ...readyState().profile, rateLbWeek: 5 };
     const guidance = calorieGuidance(profile);
-    expect(guidance.target).toBe(1000);
+    const maintenance = maintenanceCalories(profile)!;
+
+    expect(guidance.requestedRate).toBe(5);
+    expect(guidance.rate).toBeCloseTo((maintenance - 1200) / 500, 6);
+    expect(guidance.rate).toBeLessThan(5);
     expect(guidance.floorLimited).toBe(true);
+    // The capped pace and the guide are the same number seen twice (DEC-04).
+    expect(paceFromDailyGuide(profile, guidance.target!)).toBeCloseTo(guidance.rate, 6);
+  });
+
+  it("leaves a pace the floor does not reach untouched", () => {
+    const profile = { ...readyState().profile, rateLbWeek: 1 };
+    const guidance = calorieGuidance(profile);
+    expect(guidance.rate).toBe(1);
+    expect(guidance.requestedRate).toBe(1);
+    expect(guidance.floorLimited).toBe(false);
+    expect(guidance.target).toBeGreaterThan(1200);
+  });
+
+  it("does not cap a gaining plan, which raises the guide away from the floor", () => {
+    const profile = { ...readyState().profile, goalType: "gain" as const, rateLbWeek: 2 };
+    const guidance = calorieGuidance(profile);
+    expect(guidance.rate).toBe(2);
+    expect(guidance.floorLimited).toBe(false);
+    expect(guidance.target!).toBeGreaterThan(maintenanceCalories(profile)!);
   });
 
   it("seeds a missing starting weight once, preferring the earliest check-in", () => {

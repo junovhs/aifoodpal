@@ -137,7 +137,7 @@ describe("one plan intent", () => {
     expect(guideBefore - guideAfter).toBe(250);
   });
 
-  it("holds the calorie floor instead of promising a pace that would breach it", () => {
+  it("caps the saved pace at the floor instead of promising a pace the guide cannot deliver", () => {
     const state = planState({ heightIn: 60, weightLb: 120, goalWeightLb: 100, activityPAL: 1.2, rateLbWeek: 1 });
     state.weights = [];
     const root = document.createElement("main");
@@ -146,9 +146,58 @@ describe("one plan intent", () => {
 
     savePlan(root, { rateLbWeek: "5" });
 
-    openPlan(root);
-    expect(root.querySelector<HTMLInputElement>('input[name="dailyGuide"]')!.value).toBe("1000");
+    // The pace that was stored is the capped one, not the 5 that was asked for.
+    expect(state.profile.rateLbWeek).toBeLessThan(5);
     expect(calorieGuidance(planProfile(state)).floorLimited).toBe(true);
+
+    openPlan(root);
+    const guide = Number(root.querySelector<HTMLInputElement>('input[name="dailyGuide"]')!.value);
+    const pace = Number(root.querySelector<HTMLInputElement>('input[name="rateLbWeek"]')!.value);
+    expect(guide).toBeGreaterThanOrEqual(1200);
+    expect(pace).toBe(round(state.profile.rateLbWeek, 2));
+    // Reopening shows a pace and a guide that are still exact inverses of each other (DEC-04).
+    expect(paceFromDailyGuide(planProfile(state), guide)).toBeCloseTo(state.profile.rateLbWeek, 2);
+  });
+
+  it("caps the real profile that used to save a pace its calorie guide could not deliver", () => {
+    // 37, male, 5 foot 9, 196 lb, sedentary: a 1.5 lb/week pace used to save beside a 1,415
+    // guide, which is under the 1,500 floor this profile now carries.
+    const state = planState({
+      age: 37, sexForEquation: "male", heightIn: 69, weightLb: 196,
+      goalWeightLb: 170, activityPAL: 1.2, rateLbWeek: 1.5,
+    });
+    state.weights = [];
+    const root = document.createElement("main");
+    new DaybookApp(root, { load: () => state, save: vi.fn() }).start();
+    openPlan(root);
+
+    savePlan(root, { rateLbWeek: "2" });
+
+    openPlan(root);
+    const guide = Number(root.querySelector<HTMLInputElement>('input[name="dailyGuide"]')!.value);
+    const pace = Number(root.querySelector<HTMLInputElement>('input[name="rateLbWeek"]')!.value);
+    expect(guide).toBeGreaterThanOrEqual(1500);
+    expect(pace).toBeLessThan(2);
+    expect(pace).toBe(round(state.profile.rateLbWeek, 2));
+    expect(paceFromDailyGuide(planProfile(state), guide)).toBeCloseTo(state.profile.rateLbWeek, 2);
+  });
+
+  it("floors the same body at 1,200 when the equation sex is female", () => {
+    const state = planState({
+      age: 37, sexForEquation: "female", heightIn: 69, weightLb: 196,
+      goalWeightLb: 170, activityPAL: 1.2, rateLbWeek: 1.5,
+    });
+    state.weights = [];
+    const root = document.createElement("main");
+    new DaybookApp(root, { load: () => state, save: vi.fn() }).start();
+    openPlan(root);
+
+    savePlan(root, { rateLbWeek: "5" });
+
+    openPlan(root);
+    const guide = Number(root.querySelector<HTMLInputElement>('input[name="dailyGuide"]')!.value);
+    expect(guide).toBeGreaterThanOrEqual(1200);
+    expect(guide).toBeLessThan(1500);
   });
 
   it("keeps the chosen pace when only the activity level changes, and moves the calories", () => {

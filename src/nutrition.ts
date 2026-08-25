@@ -1,7 +1,29 @@
 import { emptyNutrition, isoDate, type AppState, type Entry, type ExerciseKind, type Nutrition, type NutritionTargets, type Profile } from "./model";
 
 export const FDA_DAILY_VALUES = { saturatedFatG: 20, sodiumMg: 2300, addedSugarG: 50, fiberG: 28 } as const;
+/**
+ * The lowest daily guide this app will steer to when no sex is recorded, and so no
+ * convention below applies.
+ */
 export const CALORIE_FLOOR = 1000;
+
+/**
+ * The floor by the sex the equation uses (DEC-09). A conservative convention for dieting
+ * without medical supervision — not a claim about metabolism, muscle, or what any individual
+ * body needs.
+ */
+export const CALORIE_FLOOR_BY_SEX = { male: 1500, female: 1200 } as const;
+
+/** The floor that applies to one profile. Without a recorded sex there is no convention to apply. */
+export const calorieFloor = (profile: Profile): number =>
+  profile.sexForEquation ? CALORIE_FLOOR_BY_SEX[profile.sexForEquation] : CALORIE_FLOOR;
+
+/**
+ * One step of the pace field (0.01 lb/week is 5 kcal/day). A capped pace is rounded *down* to
+ * that step before it is stored, which can leave the guide up to a whole step above the floor,
+ * so the plan still reads as sitting on the floor rather than just clear of it.
+ */
+const FLOOR_TOLERANCE_KCAL = 5;
 /** One complete week. The window every trend and balance figure is measured over. */
 export const PROJECTION_WINDOW_DAYS = 7;
 const MIN_STABLE_GOAL_RATE_LB_WEEK = 0.25;
@@ -53,7 +75,12 @@ export interface Guidance {
   rate: number;
   weeks: number | null;
   targetDate: string | null;
+  /** True while the floor is what holds this plan back, so a faster pace would change nothing. */
   floorLimited: boolean;
+  /** The pace asked for, before the floor capped it. Equal to `rate` when nothing was capped. */
+  requestedRate: number;
+  /** The floor that produced the cap, so a caller can say where the limit came from. */
+  floor: number;
 }
 
 /** Energy burned on a normal day before planned workouts. Independent of the chosen pace. */
@@ -84,6 +111,8 @@ export const calorieGuidance = (profile: Profile): Guidance => {
     weeks: null,
     targetDate: null,
     floorLimited: false,
+    requestedRate: numberOr(profile.rateLbWeek),
+    floor: calorieFloor(profile),
   };
   if (numberOr(profile.age) < 18) {
     result.reason = "Automatic guidance is only provided for adults.";
@@ -99,10 +128,18 @@ export const calorieGuidance = (profile: Profile): Guidance => {
     return result;
   }
   result.maintenance = resting * profile.activityPAL;
+  // Losing is the only direction the floor can bind: gaining raises the guide above maintenance.
+  // Cap the pace at the fastest one whose guide still clears the floor rather than clamping the
+  // calories alone, which would leave the saved pace claiming a loss the guide cannot deliver
+  // and break the rule that the two are one number seen twice (DEC-04).
+  if (profile.goalType === "lose") {
+    const fastestSafeRate = Math.max(0, (result.maintenance - result.floor) / 500);
+    if (result.rate > fastestSafeRate) result.rate = fastestSafeRate;
+  }
   const adjustment = profile.goalType === "lose" ? result.rate * 500 : profile.goalType === "gain" ? -result.rate * 500 : 0;
   const raw = result.maintenance - adjustment;
-  result.target = Math.max(CALORIE_FLOOR, raw);
-  result.floorLimited = raw < CALORIE_FLOOR;
+  result.target = Math.max(result.floor, raw);
+  result.floorLimited = profile.goalType === "lose" && raw <= result.floor + FLOOR_TOLERANCE_KCAL;
   const current = numberOr(profile.weightLb);
   const goal = numberOr(profile.goalWeightLb);
   const effectiveRate = profile.goalType === "maintain" ? 0 : Math.abs(result.maintenance - result.target) * 7 / 3500;
@@ -435,7 +472,7 @@ export const weekBalance = (state: AppState, anchor = isoDate()): WeekBalance | 
     savedCalories,
     repaymentDays: REPAYMENT_DAYS,
     catchUpDailyGuide,
-    catchUpReachable: catchUpDailyGuide >= CALORIE_FLOOR,
+    catchUpReachable: catchUpDailyGuide >= calorieFloor(profile),
     observedWeeklyChangeLb,
     planGoalDate,
     observedGoalDate,

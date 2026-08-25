@@ -4,7 +4,7 @@ import { prepareImage, type CapturedImage } from "./image";
 import { CaptureError, captureFoodViaSupabase, captureToFoodDraft, type CaptureFoodClient } from "./capture-client";
 import { decodeBarcode, lookupOpenFoodFacts, scanBarcode, type BarcodeResult } from "./barcode";
 import { createEntry, createQuickCalorieEntry, isoDate, moveDiaryEntry, normalizeFood, normalizePeriod, PERIODS, protectedSnackBudget, removeFoodFromLibrary, uid, type AppState, type ExerciseKind, type Food, type FoodInput, type GoalType, type Period, type Profile, type RecipeIngredient, type Weight } from "./model";
-import { CALORIE_FLOOR, PROJECTION_WINDOW_DAYS, calorieGuidance, calorieTrend, dailyCalorieGuide, exerciseCalories, formatDate, goalDateFromPace, goalProgressPercent, kgToPounds, latestWeight, nutritionTargets, paceFromDailyGuide, parseLocalDate, planProfile, poundsToKg, round, shiftDate, startWeight, totalsFor, weekBalance, weightProjection, type WeekBalance, type WeightProjection } from "./nutrition";
+import { PROJECTION_WINDOW_DAYS, calorieFloor, calorieGuidance, calorieTrend, dailyCalorieGuide, exerciseCalories, formatDate, goalDateFromPace, goalProgressPercent, kgToPounds, latestWeight, nutritionTargets, paceFromDailyGuide, parseLocalDate, planProfile, poundsToKg, round, shiftDate, startWeight, totalsFor, weekBalance, weightProjection, type WeekBalance, type WeightProjection } from "./nutrition";
 import { exportBackup, parseBackup, type StateRepository } from "./storage";
 import { icon, renderIcons } from "./icons";
 import { calendarGrid, formatMonth, shiftMonth } from "./calendar";
@@ -226,7 +226,7 @@ export class DaybookApp {
         support = `That is ${fmt(guide - balance.catchUpDailyGuide)} a day less than your usual ${fmt(guide)}, for seven days.`;
       } else if (balance.planGoalDate && balance.observedGoalDate) {
         headline = `${over} That is more than one week can take back, so your finish date moves from ${formatDate(balance.planGoalDate)} to ${formatDate(balance.observedGoalDate)}.`;
-        support = balance.holdPlanDailyGuide !== null && balance.holdPlanDailyGuide >= CALORIE_FLOOR
+        support = balance.holdPlanDailyGuide !== null && balance.holdPlanDailyGuide >= calorieFloor(planProfile(this.state))
           ? `To keep the older date you would need about ${fmt(balance.holdPlanDailyGuide)} calories a day from here on.`
           : "There is no safe way to keep the older date, so pick a gentler pace or a later one.";
       } else {
@@ -593,6 +593,11 @@ export class DaybookApp {
       profile.rateLbWeek = Math.max(0, round(pace, 2));
       if (calorieGuidance(profile).target !== null) profile.manualDailyGuide = null;
     }
+    // The floor caps the pace, not the calories, so what gets stored is the pace the guide can
+    // actually deliver and the two stay exact inverses (DEC-04). Rounded down, so a stored pace
+    // never asks for a guide a hair below the floor.
+    const capped = calorieGuidance(profile);
+    if (capped.ok && capped.rate < profile.rateLbWeek) profile.rateLbWeek = Math.floor(capped.rate * 100) / 100;
     return profile;
   }
 
