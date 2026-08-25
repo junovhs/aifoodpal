@@ -27,7 +27,12 @@ describe("calorie trends and exercise", () => {
     expect(root.querySelector(".history-summary")?.textContent).toContain("30-day avg");
 
     root.querySelector<HTMLElement>('[data-action="view"][data-view="trend"]')!.click();
-    expect(root.querySelector(".forecast")?.textContent).toContain("In one month");
+    expect(root.querySelector(".forecast")?.textContent).toContain("At this rate");
+    expect(root.querySelectorAll(".forecast-kpi")).toHaveLength(4);
+    expect(root.querySelector(".trend-chart svg")).not.toBeNull();
+    expect(root.querySelector(".chart-month")?.textContent).toContain("1 month");
+    expect(root.querySelector(".goal-band")?.textContent).toContain("to go");
+    expect(root.querySelectorAll(".progress-panel")).toHaveLength(2);
     root.querySelector<HTMLElement>('[data-action="open-exercise"]')!.click();
     const form = root.querySelector<HTMLFormElement>('form[data-form="exercise"]')!;
     form.querySelector<HTMLSelectElement>('select[name="kind"]')!.value = "strength";
@@ -38,6 +43,19 @@ describe("calorie trends and exercise", () => {
     expect(state.exercises[0]).toMatchObject({ kind: "strength", minutes: 20, date: today });
     expect(save).toHaveBeenCalled();
     expect(root.querySelector(".exercise-row")?.textContent).toContain("Dumbbells / strength");
+  });
+
+  it("keeps a complete sparse-state dashboard before a projection is available", () => {
+    const state = createState();
+    Object.assign(state.profile, { onboardingComplete: true, age: 35, sexForEquation: "female", heightIn: 66, weightLb: 180, goalWeightLb: 160 });
+    const root = document.createElement("main");
+    new DaybookApp(root, { load: () => state, save: vi.fn() }).start();
+    root.querySelector<HTMLElement>('[data-action="view"][data-view="trend"]')!.click();
+
+    expect(root.querySelector(".forecast-empty")?.textContent).toContain("Keep logging");
+    expect(root.querySelector(".trend-chart-empty")?.textContent).toContain("Your line will appear here");
+    expect(root.querySelector(".goal-band")?.textContent).toContain("Current weight");
+    expect(root.querySelectorAll(".progress-panel")).toHaveLength(2);
   });
 
   it("uses plain-language baseline activity choices in Settings", () => {
