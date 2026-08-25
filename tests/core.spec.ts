@@ -62,7 +62,8 @@ describe("nutrition domain", () => {
 
   it("calculates active-day averages and an exercise-aware weight projection", () => {
     const state = readyState();
-    for (let day = 17; day <= 23; day += 1) state.entries.push(createQuickCalorieEntry(1700, `2026-08-${day}`, "dinner"));
+    for (let day = 16; day <= 22; day += 1) state.entries.push(createQuickCalorieEntry(1700, `2026-08-${day}`, "dinner"));
+    state.entries.push(createQuickCalorieEntry(1700, "2026-08-23", "breakfast"));
     state.exercises.push({ id: "exercise-1", date: "2026-08-22", kind: "strength", minutes: 20, createdAt: "2026-08-22T12:00:00Z", updatedAt: "2026-08-22T12:00:00Z" });
 
     const trend = calorieTrend(state, "2026-08-23");
@@ -76,6 +77,29 @@ describe("nutrition domain", () => {
     expect(projection?.weeklyChangeLb).toBeGreaterThan(0);
     expect(projection?.oneMonthWeightLb).toBeLessThan(180);
     expect(projection?.goalDate).not.toBeNull();
+
+    state.entries.push(createQuickCalorieEntry(600, "2026-08-23", "dinner"));
+    state.exercises.push({ id: "exercise-today", date: "2026-08-23", kind: "walkBrisk", minutes: 60, createdAt: "2026-08-23T12:00:00Z", updatedAt: "2026-08-23T12:00:00Z" });
+    expect(weightProjection(state, "2026-08-23")).toEqual(projection);
+  });
+
+  it("requires seven consecutive completed food-log days for a projection", () => {
+    const state = readyState();
+    for (let day = 17; day <= 22; day += 1) state.entries.push(createQuickCalorieEntry(1700, `2026-08-${day}`, "dinner"));
+    state.entries.push(createQuickCalorieEntry(1700, "2026-08-23", "breakfast"));
+    expect(weightProjection(state, "2026-08-23")).toBeNull();
+
+    state.entries.push(createQuickCalorieEntry(1700, "2026-08-16", "dinner"));
+    expect(weightProjection(state, "2026-08-23")).toMatchObject({ activeDays: 7, spanDays: 7, averageIntake: 1700 });
+  });
+
+  it("withholds a precise goal date when the projected rate is too small to be stable", () => {
+    const state = readyState();
+    for (let day = 16; day <= 22; day += 1) state.entries.push(createQuickCalorieEntry(2400, `2026-08-${day}`, "dinner"));
+    const projection = weightProjection(state, "2026-08-23");
+    expect(projection).not.toBeNull();
+    expect(Math.abs(projection!.weeklyChangeLb)).toBeLessThan(.25);
+    expect(projection?.goalDate).toBeNull();
   });
 
   it("excludes unlogged days from active-day calorie averages", () => {

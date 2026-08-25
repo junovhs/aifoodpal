@@ -16,7 +16,7 @@ describe("calorie trends and exercise", () => {
     const today = isoDate();
     const state = createState(today);
     Object.assign(state.profile, { onboardingComplete: true, age: 35, sexForEquation: "female", heightIn: 66, weightLb: 180, goalWeightLb: 160, activityPAL: 1.2 });
-    for (let offset = -6; offset <= 0; offset += 1) state.entries.push(createQuickCalorieEntry(1700, shiftDate(today, offset), "dinner"));
+    for (let offset = -7; offset <= -1; offset += 1) state.entries.push(createQuickCalorieEntry(1700, shiftDate(today, offset), "dinner"));
     const save = vi.fn<(state: AppState) => void>();
     const root = document.createElement("main");
     new DaybookApp(root, { load: () => state, save }).start();
@@ -28,6 +28,7 @@ describe("calorie trends and exercise", () => {
 
     root.querySelector<HTMLElement>('[data-action="view"][data-view="trend"]')!.click();
     expect(root.querySelector(".forecast")?.textContent).toContain("At this rate");
+    expect(root.querySelector(".forecast")?.textContent).toContain("seven completed days before today");
     expect(root.querySelectorAll(".forecast-kpi")).toHaveLength(4);
     expect(root.querySelector(".trend-chart svg")).not.toBeNull();
     expect(root.querySelector(".chart-month")?.textContent).toContain("1 month");
@@ -43,6 +44,19 @@ describe("calorie trends and exercise", () => {
     expect(state.exercises[0]).toMatchObject({ kind: "strength", minutes: 20, date: today });
     expect(save).toHaveBeenCalled();
     expect(root.querySelector(".exercise-row")?.textContent).toContain("Dumbbells / strength");
+  });
+
+  it("explains when a goal date is withheld because the projected pace is unstable", () => {
+    const today = isoDate();
+    const state = createState(today);
+    Object.assign(state.profile, { onboardingComplete: true, age: 35, sexForEquation: "female", heightIn: 66, weightLb: 180, goalWeightLb: 160, activityPAL: 1.6 });
+    for (let offset = -7; offset <= -1; offset += 1) state.entries.push(createQuickCalorieEntry(2400, shiftDate(today, offset), "dinner"));
+    const root = document.createElement("main");
+    new DaybookApp(root, { load: () => state, save: vi.fn() }).start();
+    root.querySelector<HTMLElement>('[data-action="view"][data-view="trend"]')!.click();
+
+    expect(root.querySelector(".forecast-copy h2")?.textContent).toContain("too close to maintenance");
+    expect(root.querySelector(".forecast-kpi.date b")?.textContent).toBe("—");
   });
 
   it("keeps a complete sparse-state dashboard before a projection is available", () => {

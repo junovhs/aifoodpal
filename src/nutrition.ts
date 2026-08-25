@@ -2,6 +2,8 @@ import { emptyNutrition, isoDate, type AppState, type Entry, type ExerciseKind, 
 
 export const FDA_DAILY_VALUES = { saturatedFatG: 20, sodiumMg: 2300, addedSugarG: 50, fiberG: 28 } as const;
 export const CALORIE_FLOOR = 1000;
+const PROJECTION_WINDOW_DAYS = 7;
+const MIN_STABLE_GOAL_RATE_LB_WEEK = 0.25;
 
 export const numberOr = (value: unknown, fallback = 0): number => {
   const number = Number(value);
@@ -220,35 +222,47 @@ export interface WeightProjection {
 export const weightProjection = (state: AppState, anchor = isoDate()): WeightProjection | null => {
   const current = latestWeight(state);
   const resting = current == null ? null : restingMetabolicRate(state.profile, current);
-  const intake = calorieTrend(state, anchor).month;
-  if (!current || !resting || intake.average == null || intake.activeDays < 3) return null;
+  if (!current || !resting) return null;
 
-  const recentDates = [...new Set(state.entries.map((entry) => entry.date))]
-    .filter((date) => date >= shiftDate(anchor, -29) && date <= anchor)
-    .sort();
-  const firstDate = recentDates[0] ?? anchor;
-  const spanDays = Math.max(1, Math.round((parseLocalDate(anchor).getTime() - parseLocalDate(firstDate).getTime()) / 86_400_000) + 1);
+  // A partially logged current day is not evidence about a full future day. Use one
+  // complete calendar week, and fail closed when any day's intake is unknown.
+  const lastCompleteDate = shiftDate(anchor, -1);
+  const firstDate = shiftDate(lastCompleteDate, -(PROJECTION_WINDOW_DAYS - 1));
+  const completedDates = Array.from(
+    { length: PROJECTION_WINDOW_DAYS },
+    (_, index) => shiftDate(firstDate, index),
+  );
+  const loggedDates = new Set(
+    state.entries
+      .filter((entry) => entry.date >= firstDate && entry.date <= lastCompleteDate)
+      .map((entry) => entry.date),
+  );
+  if (completedDates.some((date) => !loggedDates.has(date))) return null;
+
+  const intakeTotal = completedDates.reduce((sum, date) => sum + totalsFor(state, date).calories, 0);
+  const averageIntake = intakeTotal / PROJECTION_WINDOW_DAYS;
   const exerciseTotal = state.exercises
-    .filter((entry) => entry.date >= firstDate && entry.date <= anchor)
+    .filter((entry) => entry.date >= firstDate && entry.date <= lastCompleteDate)
     .reduce((sum, entry) => sum + exerciseCalories(entry.kind, entry.minutes, current), 0);
-  const averageExercise = exerciseTotal / spanDays;
+  const averageExercise = exerciseTotal / PROJECTION_WINDOW_DAYS;
   const baselineMaintenance = resting * state.profile.activityPAL;
-  const dailyDeficit = baselineMaintenance + averageExercise - intake.average;
+  const dailyDeficit = baselineMaintenance + averageExercise - averageIntake;
   const dailyChangeLb = -dailyDeficit / 3500;
+  const weeklyChangeLb = dailyDeficit * 7 / 3500;
   const goal = state.profile.goalWeightLb;
   let goalDate: string | null = null;
   if (goal != null && Math.abs(goal - current) < 0.05) goalDate = anchor;
-  else if (goal != null && Math.abs(dailyChangeLb) > 0.0001 && (goal - current) * dailyChangeLb > 0) {
+  else if (goal != null && Math.abs(weeklyChangeLb) >= MIN_STABLE_GOAL_RATE_LB_WEEK && (goal - current) * dailyChangeLb > 0) {
     goalDate = shiftDate(anchor, Math.ceil(Math.abs((goal - current) / dailyChangeLb)));
   }
   return {
-    averageIntake: intake.average,
-    activeDays: intake.activeDays,
-    spanDays,
+    averageIntake,
+    activeDays: PROJECTION_WINDOW_DAYS,
+    spanDays: PROJECTION_WINDOW_DAYS,
     baselineMaintenance,
     averageExercise,
     dailyDeficit,
-    weeklyChangeLb: dailyDeficit * 7 / 3500,
+    weeklyChangeLb,
     oneMonthWeightLb: current + dailyChangeLb * 30,
     goalDate,
   };
