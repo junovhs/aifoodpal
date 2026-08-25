@@ -16,3 +16,6 @@ coverage/
 SEMMAP.md
 .semmap/
 supabase/.temp/
+
+# semclear change-witness artifact (regenerable, not committed)
+semclear-verification.json
