@@ -87,6 +87,87 @@ describe("calorie trends and exercise", () => {
     expect(root.querySelector(".chart-goal")).toBeNull();
   });
 
+  it("deletes the selected weight after confirmation and promotes the next-newest check-in", () => {
+    const today = "2026-08-25";
+    const state = createState(today);
+    Object.assign(state.profile, { onboardingComplete: true, age: 35, sexForEquation: "female", heightIn: 66, weightLb: 196, goalWeightLb: 160, goalType: "lose", rateLbWeek: 1 });
+    state.weights.push(
+      { id: "weight-older", date: "2026-08-17", weightLb: 190, createdAt: "2026-08-17T12:00:00Z", updatedAt: "2026-08-17T12:00:00Z" },
+      { id: "weight-latest", date: "2026-08-23", weightLb: 196, createdAt: "2026-08-23T12:00:00Z", updatedAt: "2026-08-23T12:00:00Z" },
+    );
+    let persisted = structuredClone(state);
+    const repository: StateRepository = {
+      load: () => structuredClone(persisted),
+      save: (next) => { persisted = structuredClone(next); },
+    };
+    const root = document.createElement("main");
+    new DaybookApp(root, repository).start();
+    root.querySelector<HTMLElement>('[data-action="view"][data-view="trend"]')!.click();
+
+    root.querySelector<HTMLElement>('[data-action="request-delete-weight"][data-id="weight-latest"]')!.click();
+    expect(root.querySelector(".delete-confirm")?.textContent).toContain("196 lb");
+    expect(root.querySelector(".delete-confirm")?.textContent).toContain("Aug 23, 2026");
+    root.querySelector<HTMLElement>('[data-action="confirm-delete-weight"]')!.click();
+
+    expect(persisted.weights.map((weight) => weight.id)).toEqual(["weight-older"]);
+    expect(persisted.profile.weightLb).toBe(190);
+    expect(root.querySelector('[data-weight-id="weight-latest"]')).toBeNull();
+    expect(root.querySelector(".goal-weight.current")?.textContent).toContain("190 lb");
+    expect(root.querySelector(".goal-remaining")?.textContent).toContain("30 lb to go");
+
+    const reloadedRoot = document.createElement("main");
+    new DaybookApp(reloadedRoot, repository).start();
+    reloadedRoot.querySelector<HTMLElement>('[data-action="view"][data-view="trend"]')!.click();
+    expect(reloadedRoot.querySelector('[data-weight-id="weight-latest"]')).toBeNull();
+    expect(reloadedRoot.querySelector('[data-weight-id="weight-older"]')).not.toBeNull();
+  });
+
+  it("keeps a weight entry when deletion is canceled", () => {
+    const state = createState("2026-08-25");
+    Object.assign(state.profile, { onboardingComplete: true, weightLb: 196, goalWeightLb: 160 });
+    state.weights.push({ id: "weight-latest", date: "2026-08-23", weightLb: 196, createdAt: "2026-08-23T12:00:00Z", updatedAt: "2026-08-23T12:00:00Z" });
+    const save = vi.fn<(state: AppState) => void>();
+    const root = document.createElement("main");
+    new DaybookApp(root, { load: () => state, save }).start();
+    root.querySelector<HTMLElement>('[data-action="view"][data-view="trend"]')!.click();
+
+    root.querySelector<HTMLElement>('[data-action="request-delete-weight"]')!.click();
+    root.querySelector<HTMLElement>('.mfooter [data-action="close"]')!.click();
+
+    expect(state.weights).toHaveLength(1);
+    expect(save).not.toHaveBeenCalled();
+    expect(root.querySelector('[data-weight-id="weight-latest"]')).not.toBeNull();
+    expect(root.querySelector(".modalback")).toBeNull();
+  });
+
+  it("exposes deletion for weight entries beyond the five most recent", () => {
+    const state = createState("2026-08-25");
+    Object.assign(state.profile, { onboardingComplete: true, weightLb: 196, goalWeightLb: 160 });
+    for (let day = 17; day <= 23; day += 1) state.weights.push({ id: `weight-${day}`, date: `2026-08-${day}`, weightLb: 190 + day - 17, createdAt: `2026-08-${day}T12:00:00Z`, updatedAt: `2026-08-${day}T12:00:00Z` });
+    const root = document.createElement("main");
+    new DaybookApp(root, { load: () => state, save: vi.fn() }).start();
+    root.querySelector<HTMLElement>('[data-action="view"][data-view="trend"]')!.click();
+
+    expect(root.querySelectorAll('[data-action="request-delete-weight"]')).toHaveLength(7);
+    expect(root.querySelector('[data-action="request-delete-weight"][data-id="weight-17"]')).not.toBeNull();
+  });
+
+  it("does not retain a deleted sole check-in as an invisible profile fallback", () => {
+    const state = createState("2026-08-25");
+    Object.assign(state.profile, { onboardingComplete: true, weightLb: 196, goalWeightLb: 160 });
+    state.weights.push({ id: "only-weight", date: "2026-08-23", weightLb: 196, createdAt: "2026-08-23T12:00:00Z", updatedAt: "2026-08-23T12:00:00Z" });
+    const root = document.createElement("main");
+    new DaybookApp(root, { load: () => state, save: vi.fn() }).start();
+    root.querySelector<HTMLElement>('[data-action="view"][data-view="trend"]')!.click();
+
+    root.querySelector<HTMLElement>('[data-action="request-delete-weight"]')!.click();
+    root.querySelector<HTMLElement>('[data-action="confirm-delete-weight"]')!.click();
+
+    expect(state.weights).toHaveLength(0);
+    expect(state.profile.weightLb).toBeNull();
+    expect(root.querySelector(".progress-panel")?.textContent).toContain("No check-ins yet");
+  });
+
   it("uses a saved manual calorie guide in the plan KPI", () => {
     const today = isoDate();
     const state = createState(today);
