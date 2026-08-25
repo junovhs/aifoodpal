@@ -4,7 +4,7 @@ import { prepareImage, type CapturedImage } from "./image";
 import { CaptureError, captureFoodViaSupabase, captureToFoodDraft, type CaptureFoodClient } from "./capture-client";
 import { decodeBarcode, lookupOpenFoodFacts, scanBarcode, type BarcodeResult } from "./barcode";
 import { createEntry, createQuickCalorieEntry, isoDate, moveDiaryEntry, normalizeFood, normalizePeriod, PERIODS, protectedSnackBudget, removeFoodFromLibrary, uid, type AppState, type ExerciseKind, type Food, type FoodInput, type Period, type RecipeIngredient, type Weight } from "./model";
-import { calorieGuidance, calorieTrend, dailyCalorieGuide, exerciseCalories, formatDate, goalDateFromPace, goalProgressPercent, kgToPounds, latestWeight, nutritionTargets, paceFromDailyGuide, planProfile, poundsToKg, round, shiftDate, startWeight, totalsFor, weightProjection } from "./nutrition";
+import { CALORIE_FLOOR, PROJECTION_WINDOW_DAYS, calorieGuidance, calorieTrend, dailyCalorieGuide, exerciseCalories, formatDate, goalDateFromPace, goalProgressPercent, kgToPounds, latestWeight, nutritionTargets, paceFromDailyGuide, parseLocalDate, planProfile, poundsToKg, round, shiftDate, startWeight, totalsFor, weekBalance, weightProjection, type WeekBalance } from "./nutrition";
 import { exportBackup, parseBackup, type StateRepository } from "./storage";
 import { icon, renderIcons } from "./icons";
 import { calendarGrid, formatMonth, shiftMonth } from "./calendar";
@@ -197,6 +197,71 @@ export class DaybookApp {
     return `<div class="head calendar-head"><div><span class="eyebrow">Saved diary</span><h1 class="title">Calendar history</h1><p class="subtitle">Every logged day stays available on this device.</p></div><div class="calendar-controls"><button class="icon-btn" data-action="calendar-month" data-months="-1" aria-label="Previous month">${icon("ChevronLeft")}</button><button class="today-btn" data-action="calendar-today">Today</button><button class="icon-btn" data-action="calendar-month" data-months="1" aria-label="Next month">${icon("ChevronRight")}</button></div></div><section class="calendar-layout"><div class="calendar-card card"><div class="calendar-month-title"><strong>${formatMonth(this.calendarMonth)}</strong><span>${activeDays} active ${activeDays === 1 ? "day" : "days"}</span></div><div class="calendar-weekdays">${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day) => `<span>${day}</span>`).join("")}</div><div class="calendar-grid">${cells}</div></div><aside class="history-summary"><span class="history-summary-icon">${icon("CalendarRange")}</span><span class="eyebrow">This month</span><strong>${fmt(monthCalories)}</strong><span>calories logged · ${monthEntries.length} ${monthEntries.length === 1 ? "entry" : "entries"}</span><div class="history-stat featured"><b>${fmt(trend.activeDayAverage.average)}</b><span>avg kcal / active day<br>${trend.activeDayAverage.activeDays} ${trend.activeDayAverage.activeDays === 1 ? "day" : "days"} total</span></div><div class="history-stat"><b>${fmt(trend.week.average)}</b><span>7-day avg<br>${trend.week.activeDays} active ${trend.week.activeDays === 1 ? "day" : "days"}</span></div><div class="history-stat"><b>${fmt(trend.month.average)}</b><span>30-day avg<br>${trend.month.activeDays} active ${trend.month.activeDays === 1 ? "day" : "days"}</span></div><p>Averages exclude unlogged days instead of treating them as zero.</p></aside></section>`;
   }
 
+
+  /**
+   * The leading sentence on Today and Progress (DEC-07): what the week did, and the smallest
+   * thing to do about it. A heavy day borrows from the week rather than failing a day (DEC-06),
+   * so nothing here counts streaks or marks a day as lost.
+   */
+  private weekSteer(): string {
+    const balance = weekBalance(this.state);
+    if (!balance) return "";
+    const guide = balance.guide;
+    const subject = balance.loggedDays === PROJECTION_WINDOW_DAYS
+      ? "Your last 7 days"
+      : `The ${fmt(balance.loggedDays)} ${balance.loggedDays === 1 ? "day" : "days"} you logged this week`;
+
+    let headline: string;
+    let support = "";
+    if (balance.loggedDays === 0) {
+      headline = "Nothing logged in the past week yet.";
+      support = "Log a few days and this will show how your week is going.";
+    } else if (balance.borrowedCalories >= 1) {
+      const over = `${subject} came in <em>${fmt(balance.borrowedCalories)}</em> calories over your plan.`;
+      if (balance.catchUpReachable) {
+        headline = `${over} Eat about <em>${fmt(balance.catchUpDailyGuide)}</em> a day this week and you are even again.`;
+        support = `That is ${fmt(guide - balance.catchUpDailyGuide)} a day less than your usual ${fmt(guide)}, for seven days.`;
+      } else if (balance.planGoalDate && balance.observedGoalDate) {
+        headline = `${over} That is more than one week can take back, so your finish date moves from ${formatDate(balance.planGoalDate)} to ${formatDate(balance.observedGoalDate)}.`;
+        support = balance.holdPlanDailyGuide !== null && balance.holdPlanDailyGuide >= CALORIE_FLOOR
+          ? `To keep the older date you would need about ${fmt(balance.holdPlanDailyGuide)} calories a day from here on.`
+          : "There is no safe way to keep the older date, so pick a gentler pace or a later one.";
+      } else {
+        headline = `${over} That is more than one week can take back, so this will take longer than planned.`;
+        support = "Ease back toward your usual amount and the week ahead will do the rest.";
+      }
+    } else if (balance.savedCalories >= 1) {
+      headline = `${subject} came in <em>${fmt(balance.savedCalories)}</em> calories under your plan.`;
+      support = "You are a little ahead. Nothing to fix.";
+    } else {
+      headline = `${subject} landed on your plan.`;
+      support = "Keep going.";
+    }
+
+    return `<section class="steer card" aria-label="How your week is going"><p class="steer-line">${headline}</p>${support ? `<p class="steer-support">${support}</p>` : ""}${this.weekStrip(balance)}</section>`;
+  }
+
+  /** Seven days against the plan line. One tone throughout: a taller bar is a fact, not a verdict. */
+  private weekStrip(balance: WeekBalance): string {
+    const dates = Array.from({ length: PROJECTION_WINDOW_DAYS }, (_, index) => shiftDate(balance.windowStart, index));
+    const logged = dates.map((date) => this.state.entries.some((entry) => entry.date === date) ? totalsFor(this.state, date).calories : null);
+    const ceiling = Math.max(balance.guide * 1.5, ...logged.map((value) => value ?? 0));
+    const guideLine = balance.guide / ceiling * 100;
+    const days = dates.map((date, index) => {
+      const calories = logged[index]!;
+      const letter = new Intl.DateTimeFormat(undefined, { weekday: "narrow" }).format(parseLocalDate(date));
+      const label = calories === null
+        ? `${formatDate(date)}: nothing logged`
+        : `${formatDate(date)}: ${fmt(calories)} calories`;
+      const bar = calories === null
+        ? `<i class="steer-bar-empty"></i>`
+        : `<i class="steer-bar" style="height:${round(Math.min(100, calories / ceiling * 100), 2)}%"></i>`;
+      // The plan line sits inside each track, so its position is an exact share of that track.
+      return `<span class="steer-day" title="${html(label)}"><span class="steer-track" role="img" aria-label="${html(label)}"><i class="steer-guide" aria-hidden="true"></i>${bar}</span><small>${html(letter)}</small></span>`;
+    }).join("");
+    return `<div class="steer-week" style="--guide:${round(guideLine, 2)}%"><small class="steer-guide-label">dashed line is your plan, ${fmt(balance.guide)} a day</small><div class="steer-days">${days}</div></div>`;
+  }
+
   private day(): string {
     const date = this.state.prefs.date;
     const totals = totalsFor(this.state, date);
@@ -212,7 +277,7 @@ export class DaybookApp {
       ? `<div class="today-warning">${fmt(budget.encroachmentCalories)} protected snack kcal used by main meals</div>`
       : "";
     const guideLine = guide ? `${fmt(totals.calories)} of ${fmt(guide)} kcal` : `${fmt(totals.calories)} kcal logged`;
-    return `<div class="today-screen"><div class="today-date"><button class="icon-btn" data-action="date" data-days="-1" aria-label="Previous day">${icon("ChevronLeft")}</button><h1>${formatDate(date, true)}</h1><button class="icon-btn" data-action="date" data-days="1" aria-label="Next day">${icon("ChevronRight")}</button><button class="today-btn" data-action="today">Today</button></div><section class="today-hero" aria-label="Daily nutrition summary"><div class="today-remaining"><strong>${remaining == null ? "—" : fmt(remaining)}</strong><span>kcal remaining</span></div><div class="today-progress" role="progressbar" aria-label="${guideLine}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${fmt(pct)}"><span style="width:${pct}%"></span></div><div class="today-progress-label">${guideLine}</div>${budgetWarning}<div class="macros">${this.macro("protein", totals.proteinG, targets?.proteinG)}${this.macro("carbs", totals.carbsG, targets?.carbsG)}${this.macro("fat", totals.fatG, targets?.fatG)}${this.macro("fiber", totals.fiberG, targets?.fiberG)}</div></section><div class="today-meals" aria-label="Meals">${meals}</div><button class="btn-primary btn-icon today-add" data-action="choose-food">${icon("Plus")}<span>Add food</span></button></div>`;
+    return `<div class="today-screen"><div class="today-date"><button class="icon-btn" data-action="date" data-days="-1" aria-label="Previous day">${icon("ChevronLeft")}</button><h1>${formatDate(date, true)}</h1><button class="icon-btn" data-action="date" data-days="1" aria-label="Next day">${icon("ChevronRight")}</button><button class="today-btn" data-action="today">Today</button></div>${this.weekSteer()}<section class="today-hero" aria-label="Daily nutrition summary"><div class="today-remaining"><strong>${remaining == null ? "—" : fmt(remaining)}</strong><span>kcal remaining</span></div><div class="today-progress" role="progressbar" aria-label="${guideLine}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${fmt(pct)}"><span style="width:${pct}%"></span></div><div class="today-progress-label">${guideLine}</div>${budgetWarning}<div class="macros">${this.macro("protein", totals.proteinG, targets?.proteinG)}${this.macro("carbs", totals.carbsG, targets?.carbsG)}${this.macro("fat", totals.fatG, targets?.fatG)}${this.macro("fiber", totals.fiberG, targets?.fiberG)}</div></section><div class="today-meals" aria-label="Meals">${meals}</div><button class="btn-primary btn-icon today-add" data-action="choose-food">${icon("Plus")}<span>Add food</span></button></div>`;
   }
 
   /** The diary that shipped before SHEL-01, kept for viewports with room to show entries inline. */
@@ -233,7 +298,7 @@ export class DaybookApp {
     const segmentLabels = PERIODS.map((period, index) => `<span class="scale-segment ${period}" style="width:${period === "snacks" ? snackSegmentWidth : mainSegmentWidth}%"><strong>${period}</strong>${guide ? `<small>${fmt(segmentCalories[index])} kcal</small>` : ""}</span>`).join("");
     const overrun = snackProtected && budget?.encroachmentCalories ? `<span class="scale-overrun" style="left:${budget.mainPercent}%;width:${budget.encroachmentPercent}%" aria-label="Main meals used ${fmt(budget.encroachmentCalories)} protected snack calories"></span>` : "";
     const budgetWarning = snackProtected && budget?.encroachmentCalories ? `<span class="budget-warning">${fmt(budget.encroachmentCalories)} protected snack kcal used by main meals</span>` : "";
-    return `<div class="page-intro"><div><span class="eyebrow">Daily diary</span><h1>${formatDate(date, true)}</h1></div><div class="datebar"><button class="icon-btn" data-action="date" data-days="-1" aria-label="Previous day">${icon("ChevronLeft")}</button><button class="today-btn" data-action="today">Today</button><button class="icon-btn" data-action="date" data-days="1" aria-label="Next day">${icon("ChevronRight")}</button></div></div><section class="card summary"><div class="summary-top"><div><div class="summary-label">Calories logged</div><div class="guide"><span class="big">${fmt(totals.calories)}</span><span>${guide ? `of ${fmt(guide)} kcal` : "kcal"}</span></div></div><div class="summary-actions"><button class="btn btn-icon" data-action="open-quick">${icon("Gauge")}<span>Quick Add</span></button><button class="btn-primary btn-icon" data-action="choose-food">${icon("Plus")}<span>Add food</span></button></div></div><div class="calorie-scale" aria-label="${fmt(pct)} percent of calorie guide"><div class="scale-track"><div class="scale-sections">${segmentLabels}</div><div class="scale-fill" style="width:${pct}%"></div>${overrun}<span class="scale-flame" style="left:${pct}%">${icon("Flame")}</span></div><div class="scale-labels">${segmentLabels}</div></div><div class="summary-note">${remaining == null ? "Add your baseline to create a daily guide." : `<strong>${fmt(remaining)}</strong> kcal remaining today${budgetWarning}`}</div><div class="macros">${this.macroColumn("protein", totals.proteinG, targets?.proteinG)}${this.macroColumn("carbs", totals.carbsG, targets?.carbsG)}${this.macroColumn("fat", totals.fatG, targets?.fatG)}${this.macroColumn("fiber", totals.fiberG, targets?.fiberG)}</div></section><div class="section-heading"><span>Meals</span><span>${this.state.entries.filter((entry) => entry.date === date).length} entries</span></div>${meals}`;
+    return `<div class="page-intro"><div><span class="eyebrow">Daily diary</span><h1>${formatDate(date, true)}</h1></div><div class="datebar"><button class="icon-btn" data-action="date" data-days="-1" aria-label="Previous day">${icon("ChevronLeft")}</button><button class="today-btn" data-action="today">Today</button><button class="icon-btn" data-action="date" data-days="1" aria-label="Next day">${icon("ChevronRight")}</button></div></div>${this.weekSteer()}<section class="card summary"><div class="summary-top"><div><div class="summary-label">Calories logged</div><div class="guide"><span class="big">${fmt(totals.calories)}</span><span>${guide ? `of ${fmt(guide)} kcal` : "kcal"}</span></div></div><div class="summary-actions"><button class="btn btn-icon" data-action="open-quick">${icon("Gauge")}<span>Quick Add</span></button><button class="btn-primary btn-icon" data-action="choose-food">${icon("Plus")}<span>Add food</span></button></div></div><div class="calorie-scale" aria-label="${fmt(pct)} percent of calorie guide"><div class="scale-track"><div class="scale-sections">${segmentLabels}</div><div class="scale-fill" style="width:${pct}%"></div>${overrun}<span class="scale-flame" style="left:${pct}%">${icon("Flame")}</span></div><div class="scale-labels">${segmentLabels}</div></div><div class="summary-note">${remaining == null ? "Add your baseline to create a daily guide." : `<strong>${fmt(remaining)}</strong> kcal remaining today${budgetWarning}`}</div><div class="macros">${this.macroColumn("protein", totals.proteinG, targets?.proteinG)}${this.macroColumn("carbs", totals.carbsG, targets?.carbsG)}${this.macroColumn("fat", totals.fatG, targets?.fatG)}${this.macroColumn("fiber", totals.fiberG, targets?.fiberG)}</div></section><div class="section-heading"><span>Meals</span><span>${this.state.entries.filter((entry) => entry.date === date).length} entries</span></div>${meals}`;
   }
 
   /** The wide macro column: an icon, the gram figure, and its target. The phone dashboard uses the compact `macro` bar instead. */
@@ -395,7 +460,7 @@ export class DaybookApp {
     const forecast = projection ? `<section class="forecast card"><div class="forecast-copy"><span class="eyebrow">Your plan</span><h2>${goalLine}</h2><p>Recent logs estimate ${fmt(Math.abs(this.displayWeight(projection.weeklyChangeLb) ?? 0), 2)} ${this.weightUnit()}/week ${projectedDirection}. That is a short-term estimate from seven completed days, not your plan timeline.</p></div><div class="forecast-kpis"><div class="forecast-kpi intake"><span>${icon("Flame")}</span><b>${fmt(projection.averageIntake)}</b><small>recent avg kcal</small></div><div class="forecast-kpi exercise"><span>${icon("Target")}</span><b>${fmt(planTarget)}</b><small>plan kcal/day</small></div><div class="forecast-kpi pace"><span>${icon("ChartNoAxesColumnIncreasing")}</span><b>${fmt(Math.abs(this.displayWeight(projection.weeklyChangeLb) ?? 0), 2)}</b><small>${this.weightUnit()}/week recent estimate</small></div><div class="forecast-kpi date"><span>${icon("CalendarRange")}</span><b>${planGoalDate ? formatDate(planGoalDate) : "—"}</b><small>plan goal date</small></div></div><p class="forecast-note">The plan date comes from the weekly pace saved in Settings. Recent calories and exercise only drive the 90-day estimate below.</p></section>` : `<section class="forecast card forecast-empty"><span class="eyebrow">Your plan</span><h2>${goalLine}</h2><p>Complete seven consecutive days of food logs to compare the plan with a short-term estimate.</p></section>`;
     const weightRows = weights.length ? weights.map((weight) => `<div class="progress-row weight-row" data-weight-id="${weight.id}"><span class="history-dot"></span><span><b>${formatDate(weight.date)}</b><small>${new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date(weight.createdAt))}</small></span><strong>${fmt(this.displayWeight(weight.weightLb), 1)} ${this.weightUnit()}</strong><button class="icon-btn danger weight-delete" data-action="request-delete-weight" data-id="${weight.id}" aria-label="${html(`Delete ${fmt(this.displayWeight(weight.weightLb), 1)} ${this.weightUnit()} weight entry from ${formatDate(weight.date)}`)}" title="Delete weight entry">${icon("Trash2")}</button></div>`).join("") : `<div class="empty compact-empty">No check-ins yet.</div>`;
     const exerciseRows = exercises.length ? exercises.slice(0, 5).map((entry) => `<div class="progress-row exercise-row"><span class="exercise-symbol">${icon("Dumbbell")}</span><span><b>${formatDate(entry.date)}</b><small>${html(EXERCISE_LABELS[entry.kind])} · ${fmt(entry.minutes)} min</small></span><strong>~${fmt(current ? exerciseCalories(entry.kind, entry.minutes, current) : null)} kcal</strong><span class="row-arrow">${icon("ChevronRight")}</span></div>`).join("") : `<div class="empty compact-empty">No exercise logged yet. A short dumbbell session or walk still counts.</div>`;
-    return `<div class="progress-page"><div class="head"><div><span class="eyebrow">Your trend</span><h1 class="title">Progress</h1><p class="subtitle">Small check-ins make the longer pattern visible.</p></div><div class="progress-actions"><button class="btn btn-icon" data-action="open-exercise" aria-label="Add exercise">${icon("Dumbbell")}<span>Add exercise</span></button><button class="btn-primary btn-icon" data-action="open-weight" aria-label="Check in weight">${icon("Weight")}<span>Check in</span></button></div></div>${forecast}${chart}${goalBand}<div class="progress-history"><section class="progress-panel card"><div class="panel-title">${icon("ChartNoAxesColumnIncreasing")}<span>Weight history</span></div>${weightRows}</section><section class="progress-panel card"><div class="panel-title">${icon("Dumbbell")}<span>Recent exercise</span></div>${exerciseRows}</section></div></div>`;
+    return `<div class="progress-page"><div class="head"><div><span class="eyebrow">Your trend</span><h1 class="title">Progress</h1><p class="subtitle">Small check-ins make the longer pattern visible.</p></div><div class="progress-actions"><button class="btn btn-icon" data-action="open-exercise" aria-label="Add exercise">${icon("Dumbbell")}<span>Add exercise</span></button><button class="btn-primary btn-icon" data-action="open-weight" aria-label="Check in weight">${icon("Weight")}<span>Check in</span></button></div></div>${this.weekSteer()}${forecast}${chart}${goalBand}<div class="progress-history"><section class="progress-panel card"><div class="panel-title">${icon("ChartNoAxesColumnIncreasing")}<span>Weight history</span></div>${weightRows}</section><section class="progress-panel card"><div class="panel-title">${icon("Dumbbell")}<span>Recent exercise</span></div>${exerciseRows}</section></div></div>`;
   }
 
   private settings(): string {

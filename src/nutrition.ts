@@ -2,7 +2,8 @@ import { emptyNutrition, isoDate, type AppState, type Entry, type ExerciseKind, 
 
 export const FDA_DAILY_VALUES = { saturatedFatG: 20, sodiumMg: 2300, addedSugarG: 50, fiberG: 28 } as const;
 export const CALORIE_FLOOR = 1000;
-const PROJECTION_WINDOW_DAYS = 7;
+/** One complete week. The window every trend and balance figure is measured over. */
+export const PROJECTION_WINDOW_DAYS = 7;
 const MIN_STABLE_GOAL_RATE_LB_WEEK = 0.25;
 
 export const numberOr = (value: unknown, fallback = 0): number => {

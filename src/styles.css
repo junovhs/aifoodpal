@@ -235,6 +235,26 @@ button:disabled { cursor: wait; opacity: .58; transform: none; }
 .forecast-note { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: 8px; text-align: right; }
 .forecast-empty { display: block; }
 .forecast-empty h2 { margin: 7px 0 4px; font: 500 21px/1.15 Georgia, serif; }
+/* The leading sentence and its week strip (DEC-07). One tone throughout: a taller bar states
+   how much a day held, and never marks the day as failed. */
+.steer { padding: 16px 20px 13px; border-color: color-mix(in oklch, var(--accent) 16%, var(--line)); }
+.steer-line { margin: 0; max-width: 62ch; font: 400 17px/1.42 Georgia, "Times New Roman", serif; letter-spacing: -.012em; }
+.steer-line em { color: var(--accent); font-style: normal; font-weight: 600; }
+.steer-support { margin: 6px 0 0; max-width: 62ch; color: var(--text-soft); font-size: 12px; line-height: 1.45; }
+.steer-week { margin-top: 12px; }
+.steer-days { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
+.steer-day { display: grid; justify-items: center; gap: 4px; min-width: 0; }
+.steer-track { position: relative; display: flex; align-items: flex-end; width: 100%; height: 42px; border-radius: 4px; background: var(--panel-muted); }
+.steer-bar { width: 100%; min-height: 2px; border-radius: 4px; background: color-mix(in oklch, var(--accent) 62%, var(--panel)); }
+.steer-bar-empty { width: 100%; height: 100%; border: 1px dashed var(--line); border-radius: 4px; }
+.steer-day small { color: var(--muted); font-size: 9px; letter-spacing: .04em; }
+.steer-guide { position: absolute; left: 0; right: 0; bottom: var(--guide, 50%); border-top: 1px dashed color-mix(in oklch, var(--accent) 60%, var(--line)); }
+.steer-guide-label { display: block; margin-bottom: 5px; color: var(--muted); font-size: 9px; }
+@media (max-width: 720px) {
+  .steer { padding: 14px 16px 11px; }
+  .steer-line { font-size: 15px; }
+  .steer-track { height: 34px; }
+}
 .panel-title { display: flex; align-items: center; gap: 9px; color: var(--text-soft); font-size: 9px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
 .panel-title .icon { color: var(--accent); }
 .trend-chart { padding: 17px 22px 12px; overflow: hidden; }

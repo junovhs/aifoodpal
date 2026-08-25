@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { DaybookApp, type FoodCaptureDeps } from "../src/app";
 import { CaptureError } from "../src/capture-client";
 import { createEntry, createQuickCalorieEntry, createState, isoDate, normalizeFood, type AppState } from "../src/model";
-import { calorieGuidance, formatDate, goalDateFromPace, maintenanceCalories, paceFromDailyGuide, planProfile, shiftDate, weightProjection } from "../src/nutrition";
+import { calorieGuidance, formatDate, goalDateFromPace, maintenanceCalories, paceFromDailyGuide, planProfile, shiftDate, weekBalance, weightProjection } from "../src/nutrition";
 import { migrateState, type StateRepository } from "../src/storage";
 
 const openSettings = (root: HTMLElement): void => {
@@ -167,6 +167,131 @@ describe("one plan intent", () => {
     expect(state.profile.manualDailyGuide).toBe(1800);
     openSettings(root);
     expect(root.querySelector<HTMLInputElement>('input[name="dailyGuide"]')!.value).toBe("1800");
+  });
+});
+
+/** A plan with an explicit week of logged days, ready to read the steering sentence from. */
+const steerState = (dailyCalories: number[], guide = 1600) => {
+  const today = isoDate();
+  const state = createState(today);
+  Object.assign(state.profile, {
+    onboardingComplete: true, age: 35, sexForEquation: "female", heightIn: 66,
+    weightLb: 196, startWeightLb: 210, goalWeightLb: 160, activityPAL: 1.6, goalType: "lose",
+  });
+  state.weights.push({ id: "w1", date: shiftDate(today, -2), weightLb: 196, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+  // Express the guide the way the plan now stores it: one pace (DEC-04).
+  state.profile.rateLbWeek = paceFromDailyGuide(planProfile(state), guide)!;
+  dailyCalories.forEach((calories, index) => state.entries.push(createQuickCalorieEntry(calories, shiftDate(today, index - 7), "dinner")));
+  return state;
+};
+
+const mount = (state: AppState): HTMLElement => {
+  const root = document.createElement("main");
+  new DaybookApp(root, { load: () => state, save: vi.fn() }).start();
+  return root;
+};
+
+const steerText = (root: HTMLElement): string => root.querySelector(".steer")?.textContent ?? "";
+
+describe("steering the week", () => {
+  it("reads a heavy day as calories borrowed and answers with one smaller number", () => {
+    const root = mount(steerState([1232, 1768, 1677, 1738, 1784, 2442, 1720]));
+    root.querySelector<HTMLElement>('[data-action="view"][data-view="trend"]')!.click();
+
+    const text = steerText(root);
+    expect(text).toContain("1,161");
+    expect(text).toContain("over your plan");
+    expect(text).toContain("1,434");
+    expect(text).toContain("even again");
+    // Nothing here may read as failing a day.
+    expect(text.toLowerCase()).not.toMatch(/streak|failed|failure|missed|blew|ruined|over budget/);
+
+    // The sentence leads the screen; the plan card and chart support it (DEC-07).
+    expect(root.querySelector(".progress-page > section")?.className).toContain("steer");
+  });
+
+  it("moves the finish date when the week cannot take the calories back", () => {
+    const state = steerState([2300, 2300, 2300, 2300, 2300, 2300, 2300]);
+    const balance = weekBalance(state)!;
+    const root = mount(state);
+    root.querySelector<HTMLElement>('[data-action="view"][data-view="trend"]')!.click();
+
+    const text = steerText(root);
+    expect(text).toContain("4,900");
+    expect(text).toContain("more than one week can take back");
+    expect(text).toContain("finish date moves from");
+    expect(text).toContain(formatDate(balance.planGoalDate!));
+    expect(text).toContain(formatDate(balance.observedGoalDate!));
+    expect(text.toLowerCase()).not.toMatch(/streak|failed|failure/);
+  });
+
+  it("says the plan is on track when the week lands on it", () => {
+    const today = isoDate();
+    const state = steerState([]);
+    const guide = Math.round(calorieGuidance(planProfile(state)).target!);
+    for (let offset = -7; offset <= -1; offset += 1) state.entries.push(createQuickCalorieEntry(guide, shiftDate(today, offset), "dinner"));
+    const root = mount(state);
+    root.querySelector<HTMLElement>('[data-action="view"][data-view="trend"]')!.click();
+
+    expect(steerText(root)).toContain("landed on your plan");
+    expect(steerText(root)).toContain("Keep going");
+  });
+
+  it("calls a light week calories saved rather than credit to spend", () => {
+    const root = mount(steerState([1300, 1300, 1300, 1300, 1300, 1300, 1300]));
+    root.querySelector<HTMLElement>('[data-action="view"][data-view="trend"]')!.click();
+
+    const text = steerText(root);
+    expect(text).toContain("2,100");
+    expect(text).toContain("under your plan");
+    expect(text).toContain("Nothing to fix");
+  });
+
+  it("names only the days that were logged", () => {
+    const today = isoDate();
+    const state = steerState([]);
+    for (const offset of [-7, -4, -1]) state.entries.push(createQuickCalorieEntry(1900, shiftDate(today, offset), "dinner"));
+    const root = mount(state);
+    root.querySelector<HTMLElement>('[data-action="view"][data-view="trend"]')!.click();
+
+    expect(steerText(root)).toContain("The 3 days you logged this week");
+  });
+
+  it("shows the same sentence on Today, above the numbers", () => {
+    const root = mount(steerState([1232, 1768, 1677, 1738, 1784, 2442, 1720]));
+    const text = steerText(root);
+    expect(text).toContain("1,161");
+    expect(text).toContain("1,434");
+
+    // The sentence comes before the calorie hero on the day screen.
+    const steer = root.querySelector(".steer")!;
+    const hero = root.querySelector(".today-hero, .summary")!;
+    expect(steer.compareDocumentPosition(hero) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("draws seven days against the plan line, with unlogged days left hollow", () => {
+    const today = isoDate();
+    const state = steerState([]);
+    for (const offset of [-7, -6, -1]) state.entries.push(createQuickCalorieEntry(1900, shiftDate(today, offset), "dinner"));
+    const root = mount(state);
+    root.querySelector<HTMLElement>('[data-action="view"][data-view="trend"]')!.click();
+
+    expect(root.querySelectorAll(".steer-day")).toHaveLength(7);
+    expect(root.querySelectorAll(".steer-bar")).toHaveLength(3);
+    expect(root.querySelectorAll(".steer-bar-empty")).toHaveLength(4);
+    expect(root.querySelector(".steer-week")?.textContent).toContain("dashed line is your plan");
+    // Every day carries its own plan line, so no day is marked as failed.
+    expect(root.querySelectorAll(".steer-guide")).toHaveLength(7);
+  });
+
+  it("keeps energy jargon out of what the user reads", () => {
+    const root = mount(steerState([1232, 1768, 1677, 1738, 1784, 2442, 1720]));
+    for (const view of ["day", "trend", "settings", "calendar"]) {
+      const tab = root.querySelector<HTMLElement>(`[data-action="view"][data-view="${view}"]`);
+      tab?.click();
+      const visible = root.textContent ?? "";
+      expect(visible).not.toMatch(/maintenance|deficit|\bPAL\b|[Pp]rojection/);
+    }
   });
 });
 
