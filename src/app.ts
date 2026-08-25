@@ -4,7 +4,7 @@ import { prepareImage, type CapturedImage } from "./image";
 import { CaptureError, captureFoodViaSupabase, captureToFoodDraft, type CaptureFoodClient } from "./capture-client";
 import { decodeBarcode, lookupOpenFoodFacts, scanBarcode, type BarcodeResult } from "./barcode";
 import { createEntry, createQuickCalorieEntry, isoDate, moveDiaryEntry, normalizeFood, normalizePeriod, PERIODS, protectedSnackBudget, removeFoodFromLibrary, uid, type AppState, type ExerciseKind, type Food, type FoodInput, type Period, type RecipeIngredient, type Weight } from "./model";
-import { CALORIE_FLOOR, PROJECTION_WINDOW_DAYS, calorieGuidance, calorieTrend, dailyCalorieGuide, exerciseCalories, formatDate, goalDateFromPace, goalProgressPercent, kgToPounds, latestWeight, nutritionTargets, paceFromDailyGuide, parseLocalDate, planProfile, poundsToKg, round, shiftDate, startWeight, totalsFor, weekBalance, weightProjection, type WeekBalance } from "./nutrition";
+import { CALORIE_FLOOR, PROJECTION_WINDOW_DAYS, calorieGuidance, calorieTrend, dailyCalorieGuide, exerciseCalories, formatDate, goalDateFromPace, goalProgressPercent, kgToPounds, latestWeight, nutritionTargets, paceFromDailyGuide, parseLocalDate, planProfile, poundsToKg, round, shiftDate, startWeight, totalsFor, weekBalance, weightProjection, type WeekBalance, type WeightProjection } from "./nutrition";
 import { exportBackup, parseBackup, type StateRepository } from "./storage";
 import { icon, renderIcons } from "./icons";
 import { calendarGrid, formatMonth, shiftMonth } from "./calendar";
@@ -395,6 +395,86 @@ export class DaybookApp {
     if (clear) clear.hidden = !key;
   }
 
+
+  /**
+   * Three labelled lines over one time axis (DEC-07): the plan, the weigh-ins that actually
+   * happened, and where the last seven logged days point. The gap between the plan and the
+   * trend is the subject of the chart, so both are drawn even when they disagree.
+   */
+  private weightChart(projection: WeightProjection | null): string {
+    const title = `<div class="panel-title">${icon("ChartNoAxesColumnIncreasing")}<span>Your weight over time</span></div>`;
+    const sparse = (heading: string, detail: string): string =>
+      `<section class="trend-chart card trend-chart-empty">${title}<div><strong>${html(heading)}</strong><span>${html(detail)}</span></div></section>`;
+
+    const current = latestWeight(this.state);
+    const today = isoDate();
+    // Only weigh-ins that have already happened can be drawn as things that happened. A
+    // check-in dated ahead of today is left out rather than plotted as history.
+    const weights = this.state.weights
+      .filter((weight) => weight.date <= today)
+      .sort((left, right) => left.date.localeCompare(right.date));
+    if (current == null || !weights.length) {
+      return sparse("Your lines will appear here", "Check in your weight and this chart starts drawing what actually happened.");
+    }
+
+    const horizonDays = 90;
+    const goal = this.state.profile.goalWeightLb;
+    const profile = planProfile(this.state);
+    const origin = weights[0]!.date < today ? weights[0]!.date : today;
+    const dayOf = (date: string): number =>
+      Math.round((parseLocalDate(date).getTime() - parseLocalDate(origin).getTime()) / 86400000);
+    const lastDay = Math.max(1, dayOf(shiftDate(today, horizonDays)));
+
+    const realSeries = weights.map((weight) => ({ day: dayOf(weight.date), weight: weight.weightLb }));
+
+    // The plan line runs at the saved pace until it reaches the goal or the chart runs out.
+    const planSeries: { day: number; weight: number }[] = [];
+    const planGoalDate = goal == null ? null : goalDateFromPace(current, goal, profile.rateLbWeek, today);
+    if (goal != null && profile.rateLbWeek > 0 && profile.goalType !== "maintain" && planGoalDate) {
+      const endDay = Math.min(lastDay, dayOf(planGoalDate));
+      const direction = goal > current ? 1 : -1;
+      const endWeight = endDay === dayOf(planGoalDate) ? goal : current + direction * profile.rateLbWeek * endDay / 7;
+      planSeries.push({ day: dayOf(today), weight: current }, { day: endDay, weight: endWeight });
+    }
+
+    const trendSeries = projection
+      ? [{ day: dayOf(today), weight: current }, { day: lastDay, weight: current - projection.weeklyChangeLb * horizonDays / 7 }]
+      : [];
+
+    const plotted = [...realSeries, ...planSeries, ...trendSeries].map((point) => point.weight);
+    const minWeight = Math.min(...plotted);
+    const maxWeight = Math.max(...plotted);
+    const padding = Math.max(3, (maxWeight - minWeight) * .18);
+    const low = minWeight - padding;
+    const high = maxWeight + padding;
+    const x = (day: number): number => 55 + day / lastDay * 880;
+    const y = (weight: number): number => 18 + (high - weight) / (high - low) * 142;
+    const path = (series: { day: number; weight: number }[]): string =>
+      series.map((point) => `${round(x(point.day), 1)},${round(y(point.weight), 1)}`).join(" ");
+
+    const grid = [0, .5, 1].map((ratio) => {
+      const value = high - (high - low) * ratio;
+      const yy = 18 + 142 * ratio;
+      return `<line x1="55" y1="${yy}" x2="935" y2="${yy}"/><text x="8" y="${yy + 4}">${fmt(this.displayWeight(value), 0)}</text>`;
+    }).join("");
+    const dateLabels = [0, Math.round(lastDay / 2), lastDay].map((day) =>
+      `<text class="date-label" x="${round(x(day), 1)}" y="190" text-anchor="${day === 0 ? "start" : day === lastDay ? "end" : "middle"}">${formatDate(shiftDate(origin, day))}</text>`).join("");
+
+    const plan = planSeries.length ? `<polyline class="chart-line chart-line-plan" points="${path(planSeries)}"/>` : "";
+    const trend = trendSeries.length ? `<polyline class="chart-line chart-line-trend" points="${path(trendSeries)}"/>` : "";
+    const real = `<polyline class="chart-line chart-line-real" points="${path(realSeries)}"/><g class="chart-dots">${realSeries.map((point) => `<circle cx="${round(x(point.day), 1)}" cy="${round(y(point.weight), 1)}" r="4"/>`).join("")}</g>`;
+
+    const legend = `<ul class="chart-legend"><li class="legend-real"><i></i><span>What you weighed</span></li>${planSeries.length ? `<li class="legend-plan"><i></i><span>Your plan</span></li>` : ""}${trendSeries.length ? `<li class="legend-trend"><i></i><span>Where this week points</span></li>` : ""}</ul>`;
+    const note = trendSeries.length
+      ? planSeries.length
+        ? `<p class="chart-note">The gap between the two lines ahead of today is what this week changed.</p>`
+        : `<p class="chart-note">Add a goal weight and a weekly pace to see your plan alongside this.</p>`
+      : `<p class="chart-note">Log seven days in a row and a third line will show where that week points.</p>`;
+
+    const described = `Weight chart from ${fmt(this.displayWeight(realSeries[0]!.weight), 1)} ${this.weightUnit()} to ${fmt(this.displayWeight(current), 1)} ${this.weightUnit()} today, looking ${horizonDays} days ahead`;
+    return `<section class="trend-chart card">${title}${legend}<div class="chart-stage"><svg viewBox="0 0 1000 205" role="img" aria-label="${html(described)}"><g class="chart-grid">${grid}</g>${plan}${trend}${real}${dateLabels}</svg></div>${note}</section>`;
+  }
+
   private trend(): string {
     const weights = [...this.state.weights].sort((a, b) => b.date.localeCompare(a.date));
     const exercises = [...this.state.exercises].sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
@@ -425,30 +505,7 @@ export class DaybookApp {
             ? `Your saved plan points to <em>${fmt(this.displayWeight(goal), 1)} ${this.weightUnit()}</em> around ${formatDate(planGoalDate)}.`
             : "Set a weekly goal pace in Settings to create a plan timeline.";
 
-    let chart = `<section class="trend-chart card trend-chart-empty"><div class="panel-title">${icon("ChartNoAxesColumnIncreasing")}<span>Recent 90-day estimate</span></div><div><strong>Your line will appear here</strong><span>Complete seven consecutive days of food logs to create a short-term estimate.</span></div></section>`;
-    if (projection && current != null) {
-      const startDate = isoDate();
-      const horizonDays = 90;
-      const pointDays = [...new Set([...Array.from({ length: 9 }, (_, index) => Math.round(index * horizonDays / 8)), 30])].sort((a, b) => a - b);
-      const weightAt = (day: number): number => current - projection.weeklyChangeLb * day / 7;
-      const pointWeights = pointDays.map(weightAt);
-      const minWeight = Math.min(...pointWeights);
-      const maxWeight = Math.max(...pointWeights);
-      const padding = Math.max(4, (maxWeight - minWeight) * .16);
-      const low = minWeight - padding;
-      const high = maxWeight + padding;
-      const x = (day: number): number => 55 + day / horizonDays * 890;
-      const y = (weight: number): number => 18 + (high - weight) / (high - low) * 142;
-      const points = pointDays.map((day, index) => `${round(x(day), 1)},${round(y(pointWeights[index]!), 1)}`).join(" ");
-      const area = `55,160 ${points} 945,160`;
-      const grid = [0, .5, 1].map((ratio) => { const value = high - (high - low) * ratio; const yy = 18 + 142 * ratio; return `<line x1="55" y1="${yy}" x2="945" y2="${yy}"/><text x="8" y="${yy + 4}">${fmt(this.displayWeight(value), 0)}</text>`; }).join("");
-      const dots = pointDays.map((day, index) => `<circle cx="${x(day)}" cy="${y(pointWeights[index]!)}" r="4"/>`).join("");
-      const monthWeight = this.displayWeight(projection.oneMonthWeightLb);
-      const monthX = x(30);
-      const monthY = y(projection.oneMonthWeightLb);
-      const labels = [0, Math.round(horizonDays / 2), horizonDays].map((day) => `<text class="date-label" x="${x(day)}" y="190" text-anchor="${day === 0 ? "start" : day === horizonDays ? "end" : "middle"}">${formatDate(shiftDate(startDate, day))}</text>`).join("");
-      chart = `<section class="trend-chart card"><div class="panel-title">${icon("ChartNoAxesColumnIncreasing")}<span>Recent 90-day estimate</span></div><div class="chart-stage"><svg viewBox="0 0 1000 205" role="img" aria-label="Short-term ${projectedDirection} estimate from ${fmt(this.displayWeight(current), 1)} ${this.weightUnit()} to ${fmt(this.displayWeight(pointWeights.at(-1)), 1)} ${this.weightUnit()} over 90 days"><g class="chart-grid">${grid}</g><polygon class="chart-area" points="${area}"/><polyline class="chart-line" points="${points}"/><g class="chart-dots">${dots}</g>${labels}</svg><span class="chart-callout chart-start" style="--x:${x(0) / 10}%;--y:${y(current) / 2.05}%"><b>${fmt(this.displayWeight(current), 1)} ${this.weightUnit()}</b><small>Current</small></span><span class="chart-callout chart-month" style="--x:${monthX / 10}%;--y:${monthY / 2.05}%"><b>${fmt(monthWeight, 1)} ${this.weightUnit()}</b><small>1 month · ${formatDate(shiftDate(startDate, 30))}</small></span></div></section>`;
-    }
+    const chart = this.weightChart(projection);
 
     const goalProgress = goalReached ? 100 : start != null && current != null && goal != null ? goalProgressPercent(start, current, goal) : 0;
     const remaining = current != null && goal != null

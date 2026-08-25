@@ -264,7 +264,19 @@ button:disabled { cursor: wait; opacity: .58; transform: none; }
 .chart-grid text, .date-label { fill: var(--muted); font: 9px Inter, ui-sans-serif, system-ui, sans-serif; }
 .chart-area { fill: color-mix(in oklch, var(--accent-soft) 68%, transparent); }
 .chart-line { fill: none; stroke: var(--accent); stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
-.chart-dots circle { fill: var(--accent); stroke: var(--panel); stroke-width: 2; }
+/* Three series, told apart by weight and dash rather than colour alone. What actually happened
+   is the darkest and most solid; the plan is a quiet reference; the trend is the line to watch. */
+.chart-line-real { stroke: var(--text); stroke-width: 2.6; }
+.chart-line-plan { stroke: color-mix(in oklch, var(--edge) 85%, var(--accent)); stroke-width: 2; stroke-dasharray: 7 6; }
+.chart-line-trend { stroke: var(--accent); stroke-width: 2.6; }
+.chart-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 9px 0 0; padding: 0; list-style: none; }
+.chart-legend li { display: flex; align-items: center; gap: 6px; color: var(--text-soft); font-size: 10px; }
+.chart-legend i { width: 16px; height: 0; border-top-width: 2.6px; border-top-style: solid; }
+.legend-real i { border-color: var(--text); }
+.legend-plan i { border-top-width: 2px; border-top-style: dashed; border-color: color-mix(in oklch, var(--edge) 85%, var(--accent)); }
+.legend-trend i { border-color: var(--accent); }
+.chart-note { margin: 7px 0 0; color: var(--muted); font-size: 10px; }
+.chart-dots circle { fill: var(--text); stroke: var(--panel); stroke-width: 2; }
 .chart-dots .goal-dot { fill: var(--panel); stroke: var(--accent); stroke-width: 4; }
 .chart-callout { position: absolute; z-index: 2; left: var(--x); top: var(--y); display: grid; min-width: 82px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 10px; background: color-mix(in oklch, var(--panel) 94%, transparent); box-shadow: var(--shadow-sm); transform: translate(-50%, -108%); pointer-events: none; }
 .chart-callout b { color: var(--accent-dark); font: 600 13px/1.1 Georgia, serif; white-space: nowrap; }

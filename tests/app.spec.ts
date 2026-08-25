@@ -295,11 +295,118 @@ describe("steering the week", () => {
   });
 });
 
+describe("the weight chart", () => {
+  const yAt = (points: string, index: number): number => Number(points.trim().split(/\s+/)[index]!.split(",")[1]);
+
+  it("draws the plan, the weigh-ins, and where this week points as three labelled lines", () => {
+    const today = isoDate();
+    // Eating well above the guide, so the trend must fall short of the plan.
+    const state = steerState([2100, 2100, 2100, 2100, 2100, 2100, 2100]);
+    state.weights.push({ id: "w0", date: shiftDate(today, -30), weightLb: 202, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+    const root = mount(state);
+    root.querySelector<HTMLElement>('[data-action="view"][data-view="trend"]')!.click();
+
+    const plan = root.querySelector<SVGPolylineElement>(".chart-line-plan")!;
+    const real = root.querySelector<SVGPolylineElement>(".chart-line-real")!;
+    const trend = root.querySelector<SVGPolylineElement>(".chart-line-trend")!;
+    expect(plan).not.toBeNull();
+    expect(real).not.toBeNull();
+    expect(trend).not.toBeNull();
+
+    const legend = root.querySelector(".chart-legend")!.textContent ?? "";
+    for (const label of ["What you weighed", "Your plan", "Where this week points"]) expect(legend).toContain(label);
+
+    // Every weigh-in is a point on the line that actually happened.
+    expect(root.querySelectorAll(".chart-dots circle")).toHaveLength(2);
+
+    // Falling behind the plan means ending at a heavier weight, drawn higher on the chart.
+    // SVG y grows downward, so the trend's end point must sit at a smaller y than the plan's.
+    const planPoints = plan.getAttribute("points")!;
+    const trendPoints = trend.getAttribute("points")!;
+    expect(yAt(trendPoints, 1)).toBeLessThan(yAt(planPoints, 1));
+    expect(root.querySelector(".chart-note")?.textContent).toContain("what this week changed");
+  });
+
+  it("says what to do instead of showing an empty frame when nothing is weighed", () => {
+    const state = steerState([1600, 1600, 1600, 1600, 1600, 1600, 1600]);
+    state.weights = [];
+    const root = mount(state);
+    root.querySelector<HTMLElement>('[data-action="view"][data-view="trend"]')!.click();
+
+    expect(root.querySelector(".chart-line-real")).toBeNull();
+    expect(root.querySelector(".trend-chart-empty")?.textContent).toContain("Your lines will appear here");
+    expect(root.querySelector(".trend-chart-empty")?.textContent).toContain("Check in your weight");
+  });
+
+  it("leaves the trend line out, in words, until a full week is logged", () => {
+    const today = isoDate();
+    const state = steerState([]);
+    for (const offset of [-5, -4, -2]) state.entries.push(createQuickCalorieEntry(1700, shiftDate(today, offset), "dinner"));
+    const root = mount(state);
+    root.querySelector<HTMLElement>('[data-action="view"][data-view="trend"]')!.click();
+
+    expect(root.querySelector(".chart-line-trend")).toBeNull();
+    expect(root.querySelector(".chart-line-real")).not.toBeNull();
+    expect(root.querySelector(".chart-legend")?.textContent).not.toContain("Where this week points");
+    expect(root.querySelector(".chart-note")?.textContent).toContain("Log seven days in a row");
+  });
+
+  it("leaves the plan line out, in words, until there is a goal and a pace", () => {
+    const state = steerState([1600, 1600, 1600, 1600, 1600, 1600, 1600]);
+    state.profile.goalWeightLb = null;
+    const root = mount(state);
+    root.querySelector<HTMLElement>('[data-action="view"][data-view="trend"]')!.click();
+
+    expect(root.querySelector(".chart-line-plan")).toBeNull();
+    expect(root.querySelector(".chart-line-trend")).not.toBeNull();
+    expect(root.querySelector(".chart-note")?.textContent).toContain("Add a goal weight");
+  });
+
+  it("keeps the plan line inside the chart when the goal is years away", () => {
+    const state = steerState([1600, 1600, 1600, 1600, 1600, 1600, 1600]);
+    state.profile.goalWeightLb = 120;
+    const root = mount(state);
+    root.querySelector<HTMLElement>('[data-action="view"][data-view="trend"]')!.click();
+
+    const points = root.querySelector(".chart-line-plan")!.getAttribute("points")!.trim().split(/\s+/);
+    // Both ends stay within the drawing area rather than running off past the horizon.
+    for (const point of points) {
+      const [px, py] = point.split(",").map(Number);
+      expect(px!).toBeGreaterThanOrEqual(55);
+      expect(px!).toBeLessThanOrEqual(935);
+      expect(py!).toBeGreaterThanOrEqual(0);
+      expect(py!).toBeLessThanOrEqual(205);
+    }
+  });
+
+  it("does not draw a check-in dated ahead of today as something that happened", () => {
+    const today = isoDate();
+    const state = steerState([1600, 1600, 1600, 1600, 1600, 1600, 1600]);
+    state.weights.push({ id: "future", date: shiftDate(today, 5), weightLb: 150, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+    const root = mount(state);
+    root.querySelector<HTMLElement>('[data-action="view"][data-view="trend"]')!.click();
+
+    expect(root.querySelectorAll(".chart-dots circle")).toHaveLength(1);
+    expect(root.querySelector(".chart-line-real")).not.toBeNull();
+  });
+
+  it("keeps the steering sentence ahead of the chart on Progress", () => {
+    const root = mount(steerState([2100, 2100, 2100, 2100, 2100, 2100, 2100]));
+    root.querySelector<HTMLElement>('[data-action="view"][data-view="trend"]')!.click();
+
+    const steer = root.querySelector(".steer")!;
+    const chart = root.querySelector(".trend-chart")!;
+    expect(steer.compareDocumentPosition(chart) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+});
+
 describe("calorie trends and exercise", () => {
   it("shows recent averages and saves an exercise that contributes to the forecast", () => {
     const today = isoDate();
     const state = createState(today);
     Object.assign(state.profile, { onboardingComplete: true, age: 35, sexForEquation: "female", heightIn: 66, weightLb: 180, goalWeightLb: 160, activityPAL: 1.2 });
+    // The chart plots weigh-ins that actually happened, so the fixture records one (DEC-05).
+    state.weights.push({ id: "w1", date: shiftDate(today, -3), weightLb: 180, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
     for (let offset = -7; offset <= -1; offset += 1) state.entries.push(createQuickCalorieEntry(1700, shiftDate(today, offset), "dinner"));
     const save = vi.fn<(state: AppState) => void>();
     const root = document.createElement("main");
@@ -315,9 +422,8 @@ describe("calorie trends and exercise", () => {
     expect(root.querySelector(".forecast")?.textContent).toContain("short-term estimate from seven completed days");
     expect(root.querySelectorAll(".forecast-kpi")).toHaveLength(4);
     expect(root.querySelector(".trend-chart svg")).not.toBeNull();
-    expect(root.querySelector(".trend-chart .panel-title")?.textContent).toContain("Recent 90-day estimate");
-    expect(root.querySelector(".chart-month")?.textContent).toContain("1 month");
-    expect(root.querySelector(".chart-goal")).toBeNull();
+    expect(root.querySelector(".trend-chart .panel-title")?.textContent).toContain("Your weight over time");
+    expect(root.querySelector(".chart-legend")?.textContent).toContain("Where this week points");
     expect(root.querySelector(".goal-band")?.textContent).toContain("to go");
     expect(root.querySelectorAll(".progress-panel")).toHaveLength(2);
     root.querySelector<HTMLElement>('[data-action="open-exercise"]')!.click();
@@ -367,8 +473,9 @@ describe("calorie trends and exercise", () => {
     expect(root.querySelector(".forecast-copy h2")?.textContent).toContain(formatDate(planDate));
     expect(root.querySelector(".forecast-copy h2")?.textContent).not.toContain(formatDate(recentGoalDate!));
     expect(root.querySelector(".forecast-kpi.date b")?.textContent).toBe(formatDate(planDate));
-    expect(root.querySelector(".trend-chart")?.outerHTML).toContain("over 90 days");
-    expect(root.querySelector(".chart-goal")).toBeNull();
+    expect(root.querySelector(".trend-chart")?.outerHTML).toContain("90 days ahead");
+    // The chart shows where this week points; it never draws a line all the way to the goal.
+    expect(root.querySelector(".chart-legend")?.textContent).toContain("Where this week points");
   });
 
   it("deletes the selected weight after confirmation and promotes the next-newest check-in", () => {
@@ -586,7 +693,7 @@ describe("calorie trends and exercise", () => {
     root.querySelector<HTMLElement>('[data-action="view"][data-view="trend"]')!.click();
 
     expect(root.querySelector(".forecast-empty")?.textContent).toContain("Complete seven consecutive days");
-    expect(root.querySelector(".trend-chart-empty")?.textContent).toContain("Your line will appear here");
+    expect(root.querySelector(".trend-chart-empty")?.textContent).toContain("Your lines will appear here");
     expect(root.querySelector(".goal-band")?.textContent).toContain("Current weight");
     expect(root.querySelectorAll(".progress-panel")).toHaveLength(2);
   });
