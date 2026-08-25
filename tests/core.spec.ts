@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { applyAiResponse, buildAiPrompt, buildFoodAiPrompt, importFoodDraft, parseAiResponse } from "../src/ai";
 import { createEntry, createQuickCalorieEntry, createState, moveDiaryEntry, normalizeFood, protectedSnackBudget, removeFoodFromLibrary, type AppState } from "../src/model";
-import { calorieGuidance, calorieTrend, exerciseCalories, nutritionTargets, totalsFor, weightProjection } from "../src/nutrition";
+import { calorieGuidance, calorieTrend, exerciseCalories, goalDateFromPace, goalProgressPercent, nutritionTargets, totalsFor, weightProjection } from "../src/nutrition";
 import { exportBackup, parseBackup } from "../src/storage";
 import { calendarGrid, formatMonth, shiftMonth } from "../src/calendar";
 import { createComboFood } from "../src/combos";
@@ -24,6 +24,19 @@ const readyState = () => {
 };
 
 describe("nutrition domain", () => {
+  it("counts only movement toward a weight goal as progress", () => {
+    expect(goalProgressPercent(190, 196, 160)).toBe(0);
+    expect(goalProgressPercent(190, 180, 160)).toBeCloseTo(33.33, 1);
+    expect(goalProgressPercent(150, 145, 170)).toBe(0);
+    expect(goalProgressPercent(150, 160, 170)).toBe(50);
+    expect(goalProgressPercent(190, 155, 160)).toBe(100);
+  });
+
+  it("turns a saved weekly pace into a deterministic goal date", () => {
+    expect(goalDateFromPace(196, 160, 1, "2026-08-25")).toBe("2027-05-04");
+    expect(goalDateFromPace(196, 160, 0, "2026-08-25")).toBeNull();
+  });
+
   it("measures when main meals consume a protected snack reserve", () => {
     expect(protectedSnackBudget(2000, 400, 1700)).toEqual({
       snackCalories: 400,

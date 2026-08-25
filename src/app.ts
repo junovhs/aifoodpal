@@ -4,7 +4,7 @@ import { prepareImage, type CapturedImage } from "./image";
 import { CaptureError, captureFoodViaSupabase, captureToFoodDraft, type CaptureFoodClient } from "./capture-client";
 import { decodeBarcode, lookupOpenFoodFacts, scanBarcode, type BarcodeResult } from "./barcode";
 import { createEntry, createQuickCalorieEntry, isoDate, moveDiaryEntry, normalizeFood, normalizePeriod, PERIODS, protectedSnackBudget, removeFoodFromLibrary, uid, type AppState, type ExerciseKind, type Food, type FoodInput, type Period, type RecipeIngredient } from "./model";
-import { calorieGuidance, calorieTrend, dailyCalorieGuide, exerciseCalories, formatDate, kgToPounds, latestWeight, nutritionTargets, parseLocalDate, poundsToKg, round, shiftDate, totalsFor, weightProjection } from "./nutrition";
+import { calorieGuidance, calorieTrend, dailyCalorieGuide, exerciseCalories, formatDate, goalDateFromPace, goalProgressPercent, kgToPounds, latestWeight, nutritionTargets, poundsToKg, round, shiftDate, totalsFor, weightProjection } from "./nutrition";
 import { exportBackup, parseBackup, type StateRepository } from "./storage";
 import { icon, renderIcons } from "./icons";
 import { calendarGrid, formatMonth, shiftMonth } from "./calendar";
@@ -334,29 +334,41 @@ export class DaybookApp {
     const weights = [...this.state.weights].sort((a, b) => b.date.localeCompare(a.date));
     const exercises = [...this.state.exercises].sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
     const current = latestWeight(this.state);
+    const oldestWeight = weights.at(-1)?.weightLb ?? current;
     const goal = this.state.profile.goalWeightLb;
     const projection = weightProjection(this.state);
+    const guidance = calorieGuidance({ ...this.state.profile, weightLb: current });
+    const goalReached = current != null && goal != null && (
+      this.state.profile.goalType === "lose" ? current <= goal + .05
+        : this.state.profile.goalType === "gain" ? current >= goal - .05
+          : false
+    );
+    const planGoalDate = guidance.ok && !goalReached && this.state.profile.goalType !== "maintain" && current != null && goal != null
+      ? goalDateFromPace(current, goal, this.state.profile.rateLbWeek)
+      : null;
+    const planTarget = dailyCalorieGuide({ ...this.state.profile, weightLb: current });
     const projectedDirection = projection && projection.weeklyChangeLb >= 0 ? "losing" : "gaining";
-    const movingTowardGoal = projection && current != null && goal != null
-      ? (goal - current) * -projection.weeklyChangeLb > 0
-      : false;
-    const goalLine = projection?.goalDate && goal != null
-      ? `At this rate, you may reach <em>${fmt(this.displayWeight(goal), 1)} ${this.weightUnit()}</em> around ${formatDate(projection.goalDate)}.`
-      : goal == null ? "Add a goal weight to estimate a target date."
-        : movingTowardGoal ? "Your recent pace is too close to maintenance for a stable goal date."
-          : "Your recent intake trend is not moving toward the goal yet.";
+    const goalLine = goal == null
+      ? "Add a goal weight to create a plan timeline."
+      : !guidance.ok
+        ? html(guidance.reason ?? "Automatic plan guidance is unavailable.")
+        : this.state.profile.goalType === "maintain"
+          ? `Your saved plan is set to maintain <em>${fmt(this.displayWeight(goal), 1)} ${this.weightUnit()}</em>.`
+          : goalReached
+            ? `You reached your saved goal of <em>${fmt(this.displayWeight(goal), 1)} ${this.weightUnit()}</em>.`
+          : planGoalDate
+            ? `Your saved plan points to <em>${fmt(this.displayWeight(goal), 1)} ${this.weightUnit()}</em> around ${formatDate(planGoalDate)}.`
+            : "Set a weekly goal pace in Settings to create a plan timeline.";
 
-    let chart = `<section class="trend-chart card trend-chart-empty"><div class="panel-title">${icon("ChartNoAxesColumnIncreasing")}<span>Projected weight trend</span></div><div><strong>Your line will appear here</strong><span>Complete seven consecutive days of food logs to create a projection.</span></div></section>`;
+    let chart = `<section class="trend-chart card trend-chart-empty"><div class="panel-title">${icon("ChartNoAxesColumnIncreasing")}<span>Recent 90-day estimate</span></div><div><strong>Your line will appear here</strong><span>Complete seven consecutive days of food logs to create a short-term estimate.</span></div></section>`;
     if (projection && current != null) {
       const startDate = isoDate();
-      const goalDays = projection.goalDate ? Math.max(0, Math.round((parseLocalDate(projection.goalDate).getTime() - parseLocalDate(startDate).getTime()) / 86_400_000)) : 90;
-      const horizonDays = Math.max(30, goalDays, 90);
-      const pointDays = [...new Set([...Array.from({ length: 9 }, (_, index) => Math.round(index * horizonDays / 8)), 30, goalDays])].filter((day) => day >= 0 && day <= horizonDays).sort((a, b) => a - b);
+      const horizonDays = 90;
+      const pointDays = [...new Set([...Array.from({ length: 9 }, (_, index) => Math.round(index * horizonDays / 8)), 30])].sort((a, b) => a - b);
       const weightAt = (day: number): number => current - projection.weeklyChangeLb * day / 7;
       const pointWeights = pointDays.map(weightAt);
-      if (goal != null && projection.goalDate) pointWeights[pointDays.indexOf(goalDays)] = goal;
-      const minWeight = Math.min(...pointWeights, goal ?? current);
-      const maxWeight = Math.max(...pointWeights, goal ?? current);
+      const minWeight = Math.min(...pointWeights);
+      const maxWeight = Math.max(...pointWeights);
       const padding = Math.max(4, (maxWeight - minWeight) * .16);
       const low = minWeight - padding;
       const high = maxWeight + padding;
@@ -365,20 +377,22 @@ export class DaybookApp {
       const points = pointDays.map((day, index) => `${round(x(day), 1)},${round(y(pointWeights[index]!), 1)}`).join(" ");
       const area = `55,160 ${points} 945,160`;
       const grid = [0, .5, 1].map((ratio) => { const value = high - (high - low) * ratio; const yy = 18 + 142 * ratio; return `<line x1="55" y1="${yy}" x2="945" y2="${yy}"/><text x="8" y="${yy + 4}">${fmt(this.displayWeight(value), 0)}</text>`; }).join("");
-      const dots = pointDays.map((day, index) => `<circle cx="${x(day)}" cy="${y(pointWeights[index]!)}" r="${day === goalDays ? 6 : 4}" class="${day === goalDays ? "goal-dot" : ""}"/>`).join("");
+      const dots = pointDays.map((day, index) => `<circle cx="${x(day)}" cy="${y(pointWeights[index]!)}" r="4"/>`).join("");
       const monthWeight = this.displayWeight(projection.oneMonthWeightLb);
       const monthX = x(30);
       const monthY = y(projection.oneMonthWeightLb);
       const labels = [0, Math.round(horizonDays / 2), horizonDays].map((day) => `<text class="date-label" x="${x(day)}" y="190" text-anchor="${day === 0 ? "start" : day === horizonDays ? "end" : "middle"}">${formatDate(shiftDate(startDate, day))}</text>`).join("");
-      chart = `<section class="trend-chart card"><div class="panel-title">${icon("ChartNoAxesColumnIncreasing")}<span>Projected weight trend</span></div><div class="chart-stage"><svg viewBox="0 0 1000 205" role="img" aria-label="Projected weight from ${fmt(this.displayWeight(current), 1)} ${this.weightUnit()} to ${fmt(this.displayWeight(pointWeights.at(-1)), 1)} ${this.weightUnit()}"><g class="chart-grid">${grid}</g><polygon class="chart-area" points="${area}"/><polyline class="chart-line" points="${points}"/><g class="chart-dots">${dots}</g>${labels}</svg><span class="chart-callout chart-start" style="--x:${x(0) / 10}%;--y:${y(current) / 2.05}%"><b>${fmt(this.displayWeight(current), 1)} ${this.weightUnit()}</b><small>Current</small></span><span class="chart-callout chart-month" style="--x:${monthX / 10}%;--y:${monthY / 2.05}%"><b>${fmt(monthWeight, 1)} ${this.weightUnit()}</b><small>1 month · ${formatDate(shiftDate(startDate, 30))}</small></span>${goal != null && projection.goalDate ? `<span class="chart-callout chart-goal" style="--x:${x(goalDays) / 10}%;--y:${y(goal) / 2.05}%"><b>${fmt(this.displayWeight(goal), 1)} ${this.weightUnit()}</b><small>Goal · ${formatDate(projection.goalDate)}</small></span>` : ""}</div></section>`;
+      chart = `<section class="trend-chart card"><div class="panel-title">${icon("ChartNoAxesColumnIncreasing")}<span>Recent 90-day estimate</span></div><div class="chart-stage"><svg viewBox="0 0 1000 205" role="img" aria-label="Short-term ${projectedDirection} estimate from ${fmt(this.displayWeight(current), 1)} ${this.weightUnit()} to ${fmt(this.displayWeight(pointWeights.at(-1)), 1)} ${this.weightUnit()} over 90 days"><g class="chart-grid">${grid}</g><polygon class="chart-area" points="${area}"/><polyline class="chart-line" points="${points}"/><g class="chart-dots">${dots}</g>${labels}</svg><span class="chart-callout chart-start" style="--x:${x(0) / 10}%;--y:${y(current) / 2.05}%"><b>${fmt(this.displayWeight(current), 1)} ${this.weightUnit()}</b><small>Current</small></span><span class="chart-callout chart-month" style="--x:${monthX / 10}%;--y:${monthY / 2.05}%"><b>${fmt(monthWeight, 1)} ${this.weightUnit()}</b><small>1 month · ${formatDate(shiftDate(startDate, 30))}</small></span></div></section>`;
     }
 
-    const oldestWeight = weights.at(-1)?.weightLb ?? current;
-    const goalSpan = oldestWeight != null && goal != null ? Math.abs(oldestWeight - goal) : 0;
-    const goalProgress = goalSpan && current != null ? Math.max(0, Math.min(100, Math.abs(oldestWeight! - current) / goalSpan * 100)) : 0;
-    const remaining = current != null && goal != null ? Math.abs(current - goal) : null;
+    const goalProgress = goalReached ? 100 : oldestWeight != null && current != null && goal != null ? goalProgressPercent(oldestWeight, current, goal) : 0;
+    const remaining = current != null && goal != null
+      ? this.state.profile.goalType === "lose" ? Math.max(0, current - goal)
+        : this.state.profile.goalType === "gain" ? Math.max(0, goal - current)
+          : Math.abs(current - goal)
+      : null;
     const goalBand = `<section class="goal-band card"><div class="goal-weight current"><span class="goal-icon">${icon("Weight")}</span><span><b>${fmt(this.displayWeight(current), 1)} <small>${this.weightUnit()}</small></b><small>Current weight</small></span></div><div class="goal-ring" style="--progress:${goalProgress * 3.6}deg"><b>${fmt(goalProgress)}%</b><small>toward goal</small></div><div class="goal-weight"><span class="goal-icon target">${icon("Target")}</span><span><b>${fmt(this.displayWeight(goal), 1)} <small>${this.weightUnit()}</small></b><small>Goal weight</small></span></div><div class="goal-remaining"><b>${fmt(this.displayWeight(remaining), 1)} ${this.weightUnit()} to go</b><span><i style="width:${goalProgress}%"></i></span></div></section>`;
-    const forecast = projection ? `<section class="forecast card"><div class="forecast-copy"><span class="eyebrow">Your current pace</span><h2>${goalLine}</h2><p>Based on the seven completed days before today.</p></div><div class="forecast-kpis"><div class="forecast-kpi intake"><span>${icon("Flame")}</span><b>${fmt(projection.averageIntake)}</b><small>avg kcal eaten</small></div><div class="forecast-kpi exercise"><span>${icon("Dumbbell")}</span><b>${fmt(projection.averageExercise)}</b><small>exercise kcal/day</small></div><div class="forecast-kpi pace"><span>${icon("ChartNoAxesColumnIncreasing")}</span><b>${fmt(Math.abs(this.displayWeight(projection.weeklyChangeLb) ?? 0), 2)}</b><small>${this.weightUnit()}/week ${projectedDirection}</small></div><div class="forecast-kpi date"><span>${icon("CalendarRange")}</span><b>${projection.goalDate ? formatDate(projection.goalDate) : "—"}</b><small>estimated goal date</small></div></div><p class="forecast-note">A planning estimate—not a promise. Food portions, workout effort, metabolism, and water weight can move the result.</p></section>` : `<section class="forecast card forecast-empty"><span class="eyebrow">Your current pace</span><h2>Keep logging to unlock a forecast</h2><p>Add baseline details in Settings and complete seven consecutive days of food logs.</p></section>`;
+    const forecast = projection ? `<section class="forecast card"><div class="forecast-copy"><span class="eyebrow">Your plan</span><h2>${goalLine}</h2><p>Recent logs estimate ${fmt(Math.abs(this.displayWeight(projection.weeklyChangeLb) ?? 0), 2)} ${this.weightUnit()}/week ${projectedDirection}. That is a short-term estimate from seven completed days, not your plan timeline.</p></div><div class="forecast-kpis"><div class="forecast-kpi intake"><span>${icon("Flame")}</span><b>${fmt(projection.averageIntake)}</b><small>recent avg kcal</small></div><div class="forecast-kpi exercise"><span>${icon("Target")}</span><b>${fmt(planTarget)}</b><small>plan kcal/day</small></div><div class="forecast-kpi pace"><span>${icon("ChartNoAxesColumnIncreasing")}</span><b>${fmt(Math.abs(this.displayWeight(projection.weeklyChangeLb) ?? 0), 2)}</b><small>${this.weightUnit()}/week recent estimate</small></div><div class="forecast-kpi date"><span>${icon("CalendarRange")}</span><b>${planGoalDate ? formatDate(planGoalDate) : "—"}</b><small>plan goal date</small></div></div><p class="forecast-note">The plan date comes from the weekly pace saved in Settings. Recent calories and exercise only drive the 90-day estimate below.</p></section>` : `<section class="forecast card forecast-empty"><span class="eyebrow">Your plan</span><h2>${goalLine}</h2><p>Complete seven consecutive days of food logs to compare the plan with a short-term estimate.</p></section>`;
     const weightRows = weights.length ? weights.slice(0, 5).map((weight) => `<div class="progress-row"><span class="history-dot"></span><span><b>${formatDate(weight.date)}</b><small>${new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date(weight.createdAt))}</small></span><strong>${fmt(this.displayWeight(weight.weightLb), 1)} ${this.weightUnit()}</strong><span class="row-arrow">${icon("ChevronRight")}</span></div>`).join("") : `<div class="empty compact-empty">No check-ins yet.</div>`;
     const exerciseRows = exercises.length ? exercises.slice(0, 5).map((entry) => `<div class="progress-row exercise-row"><span class="exercise-symbol">${icon("Dumbbell")}</span><span><b>${formatDate(entry.date)}</b><small>${html(EXERCISE_LABELS[entry.kind])} · ${fmt(entry.minutes)} min</small></span><strong>~${fmt(current ? exerciseCalories(entry.kind, entry.minutes, current) : null)} kcal</strong><span class="row-arrow">${icon("ChevronRight")}</span></div>`).join("") : `<div class="empty compact-empty">No exercise logged yet. A short dumbbell session or walk still counts.</div>`;
     return `<div class="progress-page"><div class="head"><div><span class="eyebrow">Your trend</span><h1 class="title">Progress</h1><p class="subtitle">Small check-ins make the longer pattern visible.</p></div><div class="progress-actions"><button class="btn btn-icon" data-action="open-exercise" aria-label="Add exercise">${icon("Dumbbell")}<span>Add exercise</span></button><button class="btn-primary btn-icon" data-action="open-weight" aria-label="Check in weight">${icon("Weight")}<span>Check in</span></button></div></div>${forecast}${chart}${goalBand}<div class="progress-history"><section class="progress-panel card"><div class="panel-title">${icon("ChartNoAxesColumnIncreasing")}<span>Weight history</span></div>${weightRows}</section><section class="progress-panel card"><div class="panel-title">${icon("Dumbbell")}<span>Recent exercise</span></div>${exerciseRows}</section></div></div>`;

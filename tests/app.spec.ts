@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { DaybookApp, type FoodCaptureDeps } from "../src/app";
 import { CaptureError } from "../src/capture-client";
 import { createEntry, createQuickCalorieEntry, createState, isoDate, normalizeFood, type AppState } from "../src/model";
-import { shiftDate } from "../src/nutrition";
+import { calorieGuidance, formatDate, goalDateFromPace, shiftDate, weightProjection } from "../src/nutrition";
 import type { StateRepository } from "../src/storage";
 
 const openSettings = (root: HTMLElement): void => {
@@ -27,11 +27,13 @@ describe("calorie trends and exercise", () => {
     expect(root.querySelector(".history-summary")?.textContent).toContain("30-day avg");
 
     root.querySelector<HTMLElement>('[data-action="view"][data-view="trend"]')!.click();
-    expect(root.querySelector(".forecast")?.textContent).toContain("At this rate");
-    expect(root.querySelector(".forecast")?.textContent).toContain("seven completed days before today");
+    expect(root.querySelector(".forecast")?.textContent).toContain("Your saved plan points");
+    expect(root.querySelector(".forecast")?.textContent).toContain("short-term estimate from seven completed days");
     expect(root.querySelectorAll(".forecast-kpi")).toHaveLength(4);
     expect(root.querySelector(".trend-chart svg")).not.toBeNull();
+    expect(root.querySelector(".trend-chart .panel-title")?.textContent).toContain("Recent 90-day estimate");
     expect(root.querySelector(".chart-month")?.textContent).toContain("1 month");
+    expect(root.querySelector(".chart-goal")).toBeNull();
     expect(root.querySelector(".goal-band")?.textContent).toContain("to go");
     expect(root.querySelectorAll(".progress-panel")).toHaveLength(2);
     root.querySelector<HTMLElement>('[data-action="open-exercise"]')!.click();
@@ -46,7 +48,7 @@ describe("calorie trends and exercise", () => {
     expect(root.querySelector(".exercise-row")?.textContent).toContain("Dumbbells / strength");
   });
 
-  it("explains when a goal date is withheld because the projected pace is unstable", () => {
+  it("keeps the saved plan timeline separate from an unstable recent pace", () => {
     const today = isoDate();
     const state = createState(today);
     Object.assign(state.profile, { onboardingComplete: true, age: 35, sexForEquation: "female", heightIn: 66, weightLb: 180, goalWeightLb: 160, activityPAL: 1.6 });
@@ -55,7 +57,154 @@ describe("calorie trends and exercise", () => {
     new DaybookApp(root, { load: () => state, save: vi.fn() }).start();
     root.querySelector<HTMLElement>('[data-action="view"][data-view="trend"]')!.click();
 
-    expect(root.querySelector(".forecast-copy h2")?.textContent).toContain("too close to maintenance");
+    expect(root.querySelector(".forecast-copy h2")?.textContent).toContain("Your saved plan points");
+    expect(root.querySelector(".forecast-copy")?.textContent).toContain("short-term estimate");
+    expect(root.querySelector(".forecast-kpi.date b")?.textContent).not.toBe("—");
+  });
+
+  it("does not count weight gain as progress or extend the recent estimate to the goal", () => {
+    const today = isoDate();
+    const state = createState(today);
+    Object.assign(state.profile, { onboardingComplete: true, age: 35, sexForEquation: "female", heightIn: 66, weightLb: 196, goalWeightLb: 160, activityPAL: 1.4, goalType: "lose", rateLbWeek: 1 });
+    for (let offset = -7; offset <= -1; offset += 1) state.entries.push(createQuickCalorieEntry(1845, shiftDate(today, offset), "dinner"));
+    state.weights.push(
+      { id: "weight-start", date: shiftDate(today, -8), weightLb: 190, createdAt: `${shiftDate(today, -8)}T12:00:00Z`, updatedAt: `${shiftDate(today, -8)}T12:00:00Z` },
+      { id: "weight-current", date: shiftDate(today, -2), weightLb: 196, createdAt: `${shiftDate(today, -2)}T12:00:00Z`, updatedAt: `${shiftDate(today, -2)}T12:00:00Z` },
+    );
+    const planDate = goalDateFromPace(196, 160, 1, today)!;
+    const recentGoalDate = weightProjection(state, today)?.goalDate;
+    expect(recentGoalDate).toBeTruthy();
+    expect(recentGoalDate).not.toBe(planDate);
+    const root = document.createElement("main");
+    new DaybookApp(root, { load: () => state, save: vi.fn() }).start();
+    root.querySelector<HTMLElement>('[data-action="view"][data-view="trend"]')!.click();
+
+    expect(root.querySelector(".goal-ring b")?.textContent).toBe("0%");
+    expect(root.querySelector(".forecast-copy h2")?.textContent).toContain(formatDate(planDate));
+    expect(root.querySelector(".forecast-copy h2")?.textContent).not.toContain(formatDate(recentGoalDate!));
+    expect(root.querySelector(".forecast-kpi.date b")?.textContent).toBe(formatDate(planDate));
+    expect(root.querySelector(".trend-chart")?.outerHTML).toContain("over 90 days");
+    expect(root.querySelector(".chart-goal")).toBeNull();
+  });
+
+  it("uses a saved manual calorie guide in the plan KPI", () => {
+    const today = isoDate();
+    const state = createState(today);
+    Object.assign(state.profile, { onboardingComplete: true, age: 35, sexForEquation: "female", heightIn: 66, weightLb: 196, goalWeightLb: 160, goalType: "lose", rateLbWeek: 1, manualDailyGuide: 2100 });
+    for (let offset = -7; offset <= -1; offset += 1) state.entries.push(createQuickCalorieEntry(1845, shiftDate(today, offset), "dinner"));
+    const root = document.createElement("main");
+    new DaybookApp(root, { load: () => state, save: vi.fn() }).start();
+    root.querySelector<HTMLElement>('[data-action="view"][data-view="trend"]')!.click();
+
+    expect(root.querySelector(".forecast-kpi.exercise b")?.textContent).toBe("2,100");
+  });
+
+  it("rebases the plan date on the latest weight check-in", () => {
+    const today = isoDate();
+    const state = createState(today);
+    Object.assign(state.profile, { onboardingComplete: true, age: 35, sexForEquation: "female", heightIn: 66, weightLb: 180, goalWeightLb: 160, goalType: "lose", rateLbWeek: 1 });
+    for (let offset = -7; offset <= -1; offset += 1) state.entries.push(createQuickCalorieEntry(1800, shiftDate(today, offset), "dinner"));
+    state.weights.push({ id: "latest", date: shiftDate(today, -1), weightLb: 170, createdAt: `${shiftDate(today, -1)}T12:00:00Z`, updatedAt: `${shiftDate(today, -1)}T12:00:00Z` });
+    const baselineDate = goalDateFromPace(180, 160, 1, today);
+    const rebasedDate = goalDateFromPace(170, 160, 1, today)!;
+    expect(rebasedDate).not.toBe(baselineDate);
+    const root = document.createElement("main");
+    new DaybookApp(root, { load: () => state, save: vi.fn() }).start();
+    root.querySelector<HTMLElement>('[data-action="view"][data-view="trend"]')!.click();
+
+    const baselineTarget = calorieGuidance(state.profile).target;
+    const rebasedTarget = calorieGuidance({ ...state.profile, weightLb: 170 }).target;
+    expect(rebasedTarget).not.toBe(baselineTarget);
+    expect(root.querySelector(".forecast-kpi.date b")?.textContent).toBe(formatDate(rebasedDate));
+    expect(root.querySelector(".forecast-kpi.exercise b")?.textContent).toBe(new Intl.NumberFormat().format(Math.round(rebasedTarget!)));
+  });
+
+  it("keeps the plan date tied to the saved pace when calorie guidance hits its floor", () => {
+    const today = isoDate();
+    const state = createState(today);
+    Object.assign(state.profile, { onboardingComplete: true, age: 35, sexForEquation: "female", heightIn: 60, weightLb: 120, goalWeightLb: 100, activityPAL: 1.2, goalType: "lose", rateLbWeek: 2 });
+    for (let offset = -7; offset <= -1; offset += 1) state.entries.push(createQuickCalorieEntry(1400, shiftDate(today, offset), "dinner"));
+    const guidance = calorieGuidance(state.profile);
+    const paceDate = goalDateFromPace(120, 100, 2, today)!;
+    expect(guidance.floorLimited).toBe(true);
+    expect(guidance.targetDate).not.toBe(paceDate);
+    const root = document.createElement("main");
+    new DaybookApp(root, { load: () => state, save: vi.fn() }).start();
+    root.querySelector<HTMLElement>('[data-action="view"][data-view="trend"]')!.click();
+
+    expect(root.querySelector(".forecast-kpi.date b")?.textContent).toBe(formatDate(paceDate));
+  });
+
+  it("treats a loss threshold already above the current weight as reached", () => {
+    const today = isoDate();
+    const state = createState(today);
+    Object.assign(state.profile, { onboardingComplete: true, age: 35, sexForEquation: "female", heightIn: 66, weightLb: 180, goalWeightLb: 200, goalType: "lose", rateLbWeek: 1 });
+    for (let offset = -7; offset <= -1; offset += 1) state.entries.push(createQuickCalorieEntry(1800, shiftDate(today, offset), "dinner"));
+    const root = document.createElement("main");
+    new DaybookApp(root, { load: () => state, save: vi.fn() }).start();
+    root.querySelector<HTMLElement>('[data-action="view"][data-view="trend"]')!.click();
+
+    expect(root.querySelector(".forecast-copy h2")?.textContent).toContain("reached your saved goal");
+    expect(root.querySelector(".goal-ring b")?.textContent).toBe("100%");
+    expect(root.querySelector(".forecast-kpi.date b")?.textContent).toBe("—");
+  });
+
+  it("shows a reached loss goal as complete instead of mismatched", () => {
+    const today = isoDate();
+    const state = createState(today);
+    Object.assign(state.profile, { onboardingComplete: true, age: 35, sexForEquation: "female", heightIn: 66, weightLb: 160, goalWeightLb: 160, goalType: "lose", rateLbWeek: 1 });
+    for (let offset = -7; offset <= -1; offset += 1) state.entries.push(createQuickCalorieEntry(1800, shiftDate(today, offset), "dinner"));
+    const root = document.createElement("main");
+    new DaybookApp(root, { load: () => state, save: vi.fn() }).start();
+    root.querySelector<HTMLElement>('[data-action="view"][data-view="trend"]')!.click();
+
+    expect(root.querySelector(".forecast-copy h2")?.textContent).toContain("reached your saved goal");
+    expect(root.querySelector(".goal-ring b")?.textContent).toBe("100%");
+    expect(root.querySelector(".forecast-kpi.date b")?.textContent).toBe("—");
+  });
+
+  it("shows a surpassed loss goal as complete with nothing left to go", () => {
+    const today = isoDate();
+    const state = createState(today);
+    Object.assign(state.profile, { onboardingComplete: true, age: 35, sexForEquation: "female", heightIn: 66, weightLb: 155, goalWeightLb: 160, goalType: "lose", rateLbWeek: 1 });
+    for (let offset = -7; offset <= -1; offset += 1) state.entries.push(createQuickCalorieEntry(1800, shiftDate(today, offset), "dinner"));
+    state.weights.push(
+      { id: "start", date: shiftDate(today, -30), weightLb: 190, createdAt: `${shiftDate(today, -30)}T12:00:00Z`, updatedAt: `${shiftDate(today, -30)}T12:00:00Z` },
+      { id: "current", date: shiftDate(today, -1), weightLb: 155, createdAt: `${shiftDate(today, -1)}T12:00:00Z`, updatedAt: `${shiftDate(today, -1)}T12:00:00Z` },
+    );
+    const root = document.createElement("main");
+    new DaybookApp(root, { load: () => state, save: vi.fn() }).start();
+    root.querySelector<HTMLElement>('[data-action="view"][data-view="trend"]')!.click();
+
+    expect(root.querySelector(".forecast-copy h2")?.textContent).toContain("reached your saved goal");
+    expect(root.querySelector(".goal-ring b")?.textContent).toBe("100%");
+    expect(root.querySelector(".goal-remaining b")?.textContent).toContain("0 lb to go");
+    expect(root.querySelector(".forecast-kpi.date b")?.textContent).toBe("—");
+  });
+
+  it("shows maintenance without inventing a goal date", () => {
+    const today = isoDate();
+    const state = createState(today);
+    Object.assign(state.profile, { onboardingComplete: true, age: 35, sexForEquation: "female", heightIn: 66, weightLb: 165, goalWeightLb: 160, goalType: "maintain", rateLbWeek: 1 });
+    for (let offset = -7; offset <= -1; offset += 1) state.entries.push(createQuickCalorieEntry(1800, shiftDate(today, offset), "dinner"));
+    const root = document.createElement("main");
+    new DaybookApp(root, { load: () => state, save: vi.fn() }).start();
+    root.querySelector<HTMLElement>('[data-action="view"][data-view="trend"]')!.click();
+
+    expect(root.querySelector(".forecast-copy h2")?.textContent).toContain("set to maintain");
+    expect(root.querySelector(".forecast-kpi.date b")?.textContent).toBe("—");
+  });
+
+  it("preserves the automatic-guidance safety reason on the plan card", () => {
+    const today = isoDate();
+    const state = createState(today);
+    Object.assign(state.profile, { onboardingComplete: true, age: 17, sexForEquation: "female", heightIn: 66, weightLb: 180, goalWeightLb: 160, goalType: "lose", rateLbWeek: 1 });
+    for (let offset = -7; offset <= -1; offset += 1) state.entries.push(createQuickCalorieEntry(1800, shiftDate(today, offset), "dinner"));
+    const root = document.createElement("main");
+    new DaybookApp(root, { load: () => state, save: vi.fn() }).start();
+    root.querySelector<HTMLElement>('[data-action="view"][data-view="trend"]')!.click();
+
+    expect(root.querySelector(".forecast-copy h2")?.textContent).toContain("only provided for adults");
     expect(root.querySelector(".forecast-kpi.date b")?.textContent).toBe("—");
   });
 
@@ -66,7 +215,7 @@ describe("calorie trends and exercise", () => {
     new DaybookApp(root, { load: () => state, save: vi.fn() }).start();
     root.querySelector<HTMLElement>('[data-action="view"][data-view="trend"]')!.click();
 
-    expect(root.querySelector(".forecast-empty")?.textContent).toContain("Keep logging");
+    expect(root.querySelector(".forecast-empty")?.textContent).toContain("Complete seven consecutive days");
     expect(root.querySelector(".trend-chart-empty")?.textContent).toContain("Your line will appear here");
     expect(root.querySelector(".goal-band")?.textContent).toContain("Current weight");
     expect(root.querySelectorAll(".progress-panel")).toHaveLength(2);

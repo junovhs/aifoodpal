@@ -161,6 +161,20 @@ export const latestWeight = (state: AppState): number | null => {
   return latest?.weightLb ?? state.profile.weightLb;
 };
 
+/** Percentage traveled from a starting check-in toward a goal, never rewarding movement away. */
+export const goalProgressPercent = (start: number, current: number, goal: number): number => {
+  const total = goal - start;
+  if (Math.abs(total) < 0.05) return Math.abs(current - goal) < 0.05 ? 100 : 0;
+  const traveledTowardGoal = (current - start) * Math.sign(total);
+  return Math.max(0, Math.min(100, traveledTowardGoal / Math.abs(total) * 100));
+};
+
+/** Calendar date implied by a saved weekly pace, independent of short-term calorie estimates. */
+export const goalDateFromPace = (current: number, goal: number, rateLbWeek: number, anchor = isoDate()): string | null => {
+  if (![current, goal, rateLbWeek].every(Number.isFinite) || current <= 0 || goal <= 0 || rateLbWeek <= 0) return null;
+  return shiftDate(anchor, Math.round(Math.abs(current - goal) / rateLbWeek * 7));
+};
+
 export interface CalorieAverage {
   average: number | null;
   activeDays: number;
