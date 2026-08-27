@@ -162,6 +162,10 @@ export const dailyCalorieGuide = (profile: Profile): number | null =>
   calorieGuidance(profile).target
   ?? (profile.manualDailyGuide && profile.manualDailyGuide > 0 ? profile.manualDailyGuide : null);
 
+/**
+ * Render-ready progress for a temporary recovery plan: actual food/activity credit, what
+ * remains, and today's floor-bounded cap. It is derived from AppState and never persisted.
+ */
 export interface RecoveryStatus {
   recoveredCalories: number;
   remainingCalories: number;
