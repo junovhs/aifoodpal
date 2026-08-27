@@ -106,6 +106,15 @@ export interface NutritionTargets {
   fiberG: number;
 }
 
+/** A temporary food adjustment layered over the saved plan without changing that plan. */
+export interface RecoveryPlan {
+  startedOn: string;
+  endsOn: string;
+  baseDailyGuide: number;
+  dailyReduction: number;
+  balanceCalories: number;
+}
+
 export interface Profile {
   onboardingComplete: boolean;
   units: Units;
@@ -139,6 +148,7 @@ export interface AppState {
     date: string;
     protectedSnackBudgetEnabled: boolean;
     protectedSnackCalories: number;
+    recoveryPlan: RecoveryPlan | null;
   };
 }
 
@@ -384,7 +394,7 @@ export const createState = (date = isoDate()): AppState => {
     entries: [],
     weights: [],
     exercises: [],
-    prefs: { date, protectedSnackBudgetEnabled: false, protectedSnackCalories: 200 },
+    prefs: { date, protectedSnackBudgetEnabled: false, protectedSnackCalories: 200, recoveryPlan: null },
   };
 };
 

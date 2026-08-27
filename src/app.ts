@@ -4,7 +4,7 @@ import { prepareImage, type CapturedImage } from "./image";
 import { CaptureError, captureFoodViaSupabase, captureToFoodDraft, type CaptureFoodClient } from "./capture-client";
 import { decodeBarcode, lookupOpenFoodFacts, scanBarcode, type BarcodeResult } from "./barcode";
 import { createEntry, createQuickCalorieEntry, isoDate, moveDiaryEntry, normalizeFood, normalizePeriod, PERIODS, protectedSnackBudget, removeFoodFromLibrary, uid, type AppState, type ExerciseKind, type Food, type FoodInput, type GoalType, type Period, type Profile, type RecipeIngredient, type Weight } from "./model";
-import { PROJECTION_WINDOW_DAYS, calorieFloor, calorieGuidance, calorieTrend, dailyCalorieGuide, exerciseCalories, formatDate, goalDateFromPace, goalProgressPercent, kgToPounds, latestWeight, nutritionTargets, paceFromDailyGuide, parseLocalDate, planProfile, poundsToKg, round, shiftDate, startWeight, totalsFor, weekBalance, weightProjection, type WeekBalance, type WeightProjection } from "./nutrition";
+import { PROJECTION_WINDOW_DAYS, calorieFloor, calorieGuidance, calorieTrend, dailyCalorieGuide, dailyCalorieGuideFor, exerciseCalories, formatDate, goalDateFromPace, goalProgressPercent, kgToPounds, latestWeight, nutritionTargets, paceFromDailyGuide, parseLocalDate, planProfile, poundsToKg, recoveryStatus, round, shiftDate, startWeight, totalsFor, weekBalance, weightProjection, type WeekBalance, type WeightProjection } from "./nutrition";
 import { exportBackup, parseBackup, type StateRepository } from "./storage";
 import { icon, renderIcons } from "./icons";
 import { calendarGrid, formatMonth, shiftMonth } from "./calendar";
@@ -115,7 +115,7 @@ export class DaybookApp {
   }
 
   private normalizeSnackBudget(): void {
-    const guide = dailyCalorieGuide(planProfile(this.state));
+    const guide = dailyCalorieGuideFor(this.state, this.state.prefs.date);
     if (this.state.prefs.protectedSnackBudgetEnabled && guide) {
       this.state.prefs.protectedSnackCalories = Math.min(this.state.prefs.protectedSnackCalories, Math.max(1, Math.floor(guide) - 1));
     }
@@ -210,6 +210,13 @@ export class DaybookApp {
     const balance = weekBalance(this.state);
     if (!balance) return "";
     const guide = balance.guide;
+    const recovery = this.state.prefs.recoveryPlan;
+    const status = recoveryStatus(this.state);
+    if (recovery && status) {
+      const progress = recovery.balanceCalories ? Math.min(100, status.recoveredCalories / recovery.balanceCalories * 100) : 100;
+      const target = dailyCalorieGuideFor(this.state, isoDate());
+      return `<section class="steer recovery-card card" aria-label="Recovery plan"><div class="recovery-heading"><span>Recovery plan</span><strong>${fmt(status.remainingCalories)} left</strong></div><p class="recovery-summary">Your temporary target is ${fmt(target)} calories today.</p><div class="recovery-meter" role="progressbar" aria-label="${fmt(progress)} percent rebalanced" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${fmt(progress)}"><span style="width:${progress}%"></span></div><div class="recovery-route"><span><b>${fmt(target)}</b><small>kcal today</small></span><i>${icon("ArrowRight")}</i><span><b>${formatDate(recovery.endsOn)}</b><small>back to your saved plan</small></span></div><div class="recovery-actions"><button class="tiny-btn" data-action="open-exercise">${icon("Dumbbell")} Add activity</button><button class="tiny-btn" data-action="cancel-recovery">Cancel adjustment</button></div></section>`;
+    }
     const subject = balance.loggedDays === PROJECTION_WINDOW_DAYS
       ? "Your last 7 days"
       : `The ${fmt(balance.loggedDays)} ${balance.loggedDays === 1 ? "day" : "days"} you logged this week`;
@@ -220,22 +227,21 @@ export class DaybookApp {
       headline = "Nothing logged in the past week yet.";
       support = "Log a few days and this will show how your week is going.";
     } else if (balance.borrowedCalories >= 1) {
-      const over = `${subject} came in <em>${fmt(balance.borrowedCalories)}</em> calories over your plan.`;
-      if (balance.catchUpReachable) {
-        headline = `${over} Eat about <em>${fmt(balance.catchUpDailyGuide)}</em> a day this week and you are even again.`;
-        support = `That is ${fmt(guide - balance.catchUpDailyGuide)} a day less than your usual ${fmt(guide)}, for seven days.`;
-      } else if (balance.planGoalDate && balance.adjustedGoalDate) {
-        const drift = Math.max(0, balance.goalDateDriftDays ?? 0);
-        headline = `${over} That is more than the next week can take back within this app's minimum. Go back to your usual ${fmt(guide)} a day now and it adds about ${fmt(drift)} ${drift === 1 ? "day" : "days"}, moving your finish from ${formatDate(balance.planGoalDate)} to ${formatDate(balance.adjustedGoalDate)}.`;
-        support = balance.holdPlanDailyGuide !== null && balance.holdPlanDailyGuide >= calorieFloor(planProfile(this.state))
-          ? `Keeping the older date would mean about ${fmt(balance.holdPlanDailyGuide)} calories a day from now until then.`
-          : balance.holdPlanDailyGuide !== null
-            ? `Keeping the older date would mean about ${fmt(balance.holdPlanDailyGuide)} a day, below this app's ${fmt(calorieFloor(planProfile(this.state)))}-calorie minimum. Going lower is something to discuss with a doctor.`
-            : "Keep your usual plan and use the later date.";
-      } else {
-        headline = `${over} That is more than one week can take back, so this will take longer than planned.`;
-        support = "Ease back toward your usual amount and the week ahead will do the rest.";
-      }
+      const floor = calorieFloor(planProfile(this.state));
+      const drift = Math.max(0, balance.goalDateDriftDays ?? 0);
+      const gentleDays = Math.max(21, Math.ceil(balance.borrowedCalories / 100));
+      const durations = [...new Set([7, 14, gentleDays])]
+        .filter((days) => guide - balance.borrowedCalories / days >= floor);
+      const preferred = durations.find((days) => balance.borrowedCalories / days <= 100) ?? durations.at(-1);
+      const options = durations.slice(0, 2).map((days) => {
+        const target = guide - balance.borrowedCalories / days;
+        return `<button class="recovery-option ${days === preferred ? "recommended" : ""}" data-action="start-recovery" data-days="${days}"><b>${fmt(target)}/day</b><span>${days} days · ${fmt(balance.borrowedCalories / days)} less</span>${days === preferred ? "<small>recommended</small>" : ""}</button>`;
+      }).join("");
+      const finish = balance.adjustedGoalDate ? formatDate(balance.adjustedGoalDate) : "a little later";
+      const summary = options
+        ? "Pick a pace, or add activity."
+        : `Resume ${fmt(guide)} a day; this adds about ${fmt(drift)} ${drift === 1 ? "day" : "days"}.`;
+      return `<section class="steer recovery-card card" aria-label="How to rebalance this week"><div class="recovery-heading"><span>Weekly balance</span><strong>${fmt(balance.borrowedCalories)} over</strong></div><p class="recovery-summary">${summary}</p><div class="recovery-route"><span><b>${fmt(balance.borrowedCalories)}</b><small>to rebalance</small></span><i>${icon("ArrowRight")}</i><span><b>${fmt(guide)}/day</b><small>saved plan</small></span><i>${icon("ArrowRight")}</i><span><b>${drift ? `+${fmt(drift)} days` : finish}</b><small>${drift ? finish : "finish"}</small></span></div>${options ? `<div class="recovery-choices"><p>Auto-adjust food</p><div>${options}</div></div>` : `<p class="recovery-floor">Already at this app's ${fmt(floor)}-calorie minimum.</p>`}<div class="recovery-actions"><button class="tiny-btn" data-action="open-exercise">${icon("Dumbbell")} Add activity</button></div></section>`;
     } else if (balance.savedCalories >= 1) {
       headline = `${subject} came in <em>${fmt(balance.savedCalories)}</em> calories under your plan.`;
       support = "You are a little ahead. Nothing to fix.";
@@ -271,8 +277,8 @@ export class DaybookApp {
   private day(): string {
     const date = this.state.prefs.date;
     const totals = totalsFor(this.state, date);
-    const guide = dailyCalorieGuide(planProfile(this.state));
-    const targets = nutritionTargets(planProfile(this.state));
+    const guide = dailyCalorieGuideFor(this.state, date);
+    const targets = nutritionTargets(planProfile(this.state), guide);
     const pct = guide ? Math.min(100, totals.calories / guide * 100) : 0;
     const meals = PERIODS.map((period) => this.meal(period, date)).join("");
     const remaining = guide ? Math.max(0, guide - totals.calories) : null;
@@ -290,8 +296,8 @@ export class DaybookApp {
   private dayDesktop(): string {
     const date = this.state.prefs.date;
     const totals = totalsFor(this.state, date);
-    const guide = dailyCalorieGuide(planProfile(this.state));
-    const targets = nutritionTargets(planProfile(this.state));
+    const guide = dailyCalorieGuideFor(this.state, date);
+    const targets = nutritionTargets(planProfile(this.state), guide);
     const pct = guide ? Math.min(100, totals.calories / guide * 100) : 0;
     const meals = PERIODS.map((period) => this.mealGroup(period, date)).join("");
     const remaining = guide ? Math.max(0, guide - totals.calories) : null;
@@ -336,7 +342,7 @@ export class DaybookApp {
   }
 
   private snackBudgetForm(): string {
-    const guide = dailyCalorieGuide(planProfile(this.state));
+    const guide = dailyCalorieGuideFor(this.state, this.state.prefs.date);
     const snackBudgetMax = guide ? `max="${Math.max(1, Math.floor(guide) - 1)}"` : "";
     return `<form class="snack-budget card" data-form="snack-budget"><label class="snack-budget-toggle"><input type="checkbox" name="enabled" ${this.state.prefs.protectedSnackBudgetEnabled ? "checked" : ""}><span><strong>Protect snack calories</strong><small>Warn when main meals use this reserve.</small></span></label><label class="snack-budget-amount"><span>Save</span><input type="number" name="calories" min="1" ${snackBudgetMax} step="1" inputmode="numeric" value="${this.state.prefs.protectedSnackCalories}" aria-label="Calories to save for snacks"><span>kcal</span></label><button class="tiny-btn" type="submit">Save</button></form>`;
   }
@@ -624,6 +630,7 @@ export class DaybookApp {
 
   private submitPlan(data: FormData): void {
     this.state.profile = this.planDraft(data, this.planEdited);
+    this.state.prefs.recoveryPlan = null;
     this.planEdited = undefined;
     this.view = "trend";
     this.save("plan saved");
@@ -750,6 +757,26 @@ export class DaybookApp {
     if (action === "delete-entry") { this.state.entries = this.state.entries.filter((entry) => entry.id !== button.dataset.id); this.save("entry removed"); }
     if (action === "open-weight") { this.modal = { kind: "weight" }; this.render(); }
     if (action === "open-exercise") { this.modal = { kind: "exercise" }; this.render(); }
+    if (action === "start-recovery") {
+      const balance = weekBalance(this.state);
+      const days = Number(button.dataset.days);
+      const baseDailyGuide = dailyCalorieGuide(planProfile(this.state));
+      if (balance?.borrowedCalories && baseDailyGuide && Number.isInteger(days) && days > 0) {
+        const dailyReduction = balance.borrowedCalories / days;
+        if (baseDailyGuide - dailyReduction >= calorieFloor(planProfile(this.state))) {
+          const startedOn = isoDate();
+          this.state.prefs.recoveryPlan = {
+            startedOn,
+            endsOn: shiftDate(startedOn, days - 1),
+            baseDailyGuide,
+            dailyReduction,
+            balanceCalories: balance.borrowedCalories,
+          };
+          this.save(`${days}-day recovery plan started`);
+        }
+      }
+    }
+    if (action === "cancel-recovery") { this.state.prefs.recoveryPlan = null; this.save("recovery adjustment canceled"); }
     if (action === "open-backup") { this.modal = { kind: "backup" }; this.render(); }
     if (action === "open-ai") { this.modal = { kind: "ai", stage: "request" }; this.render(); }
     if (action === "download") this.download();
@@ -900,7 +927,7 @@ export class DaybookApp {
     const enabled = data.get("enabled") === "on";
     const calories = Math.round(getNumber(data, "calories") ?? this.state.prefs.protectedSnackCalories);
     if (enabled && calories < 1) throw new Error("Save at least 1 calorie for snacks.");
-    const guide = dailyCalorieGuide(planProfile(this.state));
+    const guide = dailyCalorieGuideFor(this.state, this.state.prefs.date);
     if (enabled && guide && calories >= guide) throw new Error(`Save fewer than ${fmt(guide)} calories for snacks.`);
     this.state.prefs.protectedSnackBudgetEnabled = enabled;
     this.state.prefs.protectedSnackCalories = Math.max(1, calories);

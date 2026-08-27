@@ -377,23 +377,25 @@ describe("the plan screen", () => {
 });
 
 describe("steering the week", () => {
-  it("reads a heavy day as calories borrowed and answers with one smaller number", () => {
+  it("turns a heavy week into compact automatic recovery choices", () => {
     const root = mount(steerState([1232, 1768, 1677, 1738, 1784, 2442, 1720]));
     root.querySelector<HTMLElement>('[data-action="view"][data-view="trend"]')!.click();
 
     const text = steerText(root);
     expect(text).toContain("1,161");
-    expect(text).toContain("over your plan");
+    expect(text).toContain("to rebalance");
     expect(text).toContain("1,434");
-    expect(text).toContain("even again");
+    expect(text).toContain("1,517");
+    expect(text).toContain("recommended");
     // Nothing here may read as failing a day.
     expect(text.toLowerCase()).not.toMatch(/streak|failed|failure|missed|blew|ruined|over budget/);
 
-    // The sentence leads the screen; the plan card and chart support it (DEC-07).
+    expect(text.length).toBeLessThan(220);
+    // The visual leads the screen; the plan card and chart support it (DEC-07).
     expect(root.querySelector(".progress-page > section")?.className).toContain("steer");
   });
 
-  it("explains the finite finish-date cost when the next week cannot take the calories back", () => {
+  it("shows a compact balance route and a gentle longer option for a large overage", () => {
     const state = steerState([2300, 2300, 2300, 2300, 2300, 2300, 2300]);
     const balance = weekBalance(state)!;
     const root = mount(state);
@@ -401,12 +403,9 @@ describe("steering the week", () => {
 
     const text = steerText(root);
     expect(text).toContain("4,900");
-    expect(text).toContain("more than the next week can take back");
-    expect(text).toContain("Go back to your usual");
-    expect(text).toContain(`adds about ${balance.goalDateDriftDays} days`);
-    expect(text).not.toContain("from here on");
-    expect(text).toContain(formatDate(balance.planGoalDate!));
+    expect(text).toContain(`${balance.goalDateDriftDays} days`);
     expect(text).toContain(formatDate(balance.adjustedGoalDate!));
+    expect(text).toContain("49 days");
     expect(text.toLowerCase()).not.toMatch(/streak|failed|failure/);
   });
 
@@ -432,14 +431,15 @@ describe("steering the week", () => {
     expect(text).toContain("Nothing to fix");
   });
 
-  it("names only the days that were logged", () => {
+  it("keeps a partial week's recovery visual compact", () => {
     const today = isoDate();
     const state = steerState([]);
     for (const offset of [-7, -4, -1]) state.entries.push(createQuickCalorieEntry(1900, shiftDate(today, offset), "dinner"));
     const root = mount(state);
     root.querySelector<HTMLElement>('[data-action="view"][data-view="trend"]')!.click();
 
-    expect(steerText(root)).toContain("The 3 days you logged this week");
+    expect(steerText(root)).toContain("900");
+    expect(steerText(root)).toContain("to rebalance");
   });
 
   it("shows the same sentence on Today, above the numbers", () => {
@@ -457,7 +457,7 @@ describe("steering the week", () => {
   it("draws seven days against the plan line, with unlogged days left hollow", () => {
     const today = isoDate();
     const state = steerState([]);
-    for (const offset of [-7, -6, -1]) state.entries.push(createQuickCalorieEntry(1900, shiftDate(today, offset), "dinner"));
+    for (const offset of [-7, -6, -1]) state.entries.push(createQuickCalorieEntry(1500, shiftDate(today, offset), "dinner"));
     const root = mount(state);
     root.querySelector<HTMLElement>('[data-action="view"][data-view="trend"]')!.click();
 
@@ -467,6 +467,46 @@ describe("steering the week", () => {
     expect(root.querySelector(".steer-week")?.textContent).toContain("dashed line is your plan");
     // Every day carries its own plan line, so no day is marked as failed.
     expect(root.querySelectorAll(".steer-guide")).toHaveLength(7);
+  });
+
+  it("does not offer food cuts or fasting when the saved plan is already at the floor", () => {
+    const state = steerState([1800, 1800, 1800, 1800, 1800, 1800, 1800], 1500);
+    state.profile.sexForEquation = "male";
+    state.profile.activityPAL = 1.2;
+    state.profile.rateLbWeek = paceFromDailyGuide(planProfile(state), 1500)!;
+    const root = mount(state);
+
+    const text = steerText(root);
+    expect(text).toContain("2,100");
+    expect(text).toContain("1,500/day");
+    expect(text).toContain("+3 days");
+    expect(text).toContain("Already at this app's 1,500-calorie minimum");
+    expect(root.querySelector(".recovery-option")).toBeNull();
+    expect(text.toLowerCase()).not.toContain("fast");
+
+    root.querySelector<HTMLElement>('[data-action="open-exercise"]')!.click();
+    const exercise = root.querySelector<HTMLFormElement>('form[data-form="exercise"]')!;
+    expect(exercise).not.toBeNull();
+    exercise.querySelector<HTMLSelectElement>('[name="kind"]')!.value = "walkBrisk";
+    exercise.querySelector<HTMLInputElement>('[name="minutes"]')!.value = "30";
+    exercise.requestSubmit();
+    expect(steerText(root)).not.toContain("2,100 over");
+  });
+
+  it("activates a recovery option, changes Today's real cap, and can cancel it", () => {
+    const state = steerState([1232, 1768, 1677, 1738, 1784, 2442, 1720]);
+    const root = mount(state);
+    const option = root.querySelector<HTMLElement>(".recovery-option.recommended")!;
+    const target = option.querySelector("b")!.textContent!.split("/")[0]!;
+    option.click();
+
+    expect(state.prefs.recoveryPlan).toMatchObject({ dailyReduction: expect.any(Number), balanceCalories: expect.any(Number) });
+    expect(root.querySelector(".recovery-heading")?.textContent).toContain("Recovery plan");
+    expect(root.querySelector(".today-progress-label")?.textContent).toContain(`of ${target} kcal`);
+
+    root.querySelector<HTMLElement>('[data-action="cancel-recovery"]')!.click();
+    expect(state.prefs.recoveryPlan).toBeNull();
+    expect(root.querySelector(".today-progress-label")?.textContent).toContain("of 1,600 kcal");
   });
 
   it("keeps energy jargon out of what the user reads", () => {
