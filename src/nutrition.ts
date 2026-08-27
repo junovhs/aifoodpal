@@ -394,9 +394,12 @@ export interface WeekBalance {
   observedWeeklyChangeLb: number | null;
   /** The goal date the saved plan points to. */
   planGoalDate: string | null;
-  /** The goal date the window's own behaviour points to. */
-  observedGoalDate: string | null;
-  /** Days the observed date sits later than the plan date. Negative means ahead of plan. */
+  /**
+   * The saved goal date after applying this window's accrued calorie balance once, then
+   * returning to the saved pace. This does not assume the window's intake continues forever.
+   */
+  adjustedGoalDate: string | null;
+  /** Days the accrued balance moves the saved date. Negative means ahead of plan. */
   goalDateDriftDays: number | null;
   /**
    * The daily average, sustained for the whole remaining span, that still lands on the plan
@@ -446,19 +449,26 @@ export const weekBalance = (state: AppState, anchor = isoDate()): WeekBalance | 
 
   const goal = profile.goalWeightLb;
   const planGoalDate = goal == null ? null : goalDateFromPace(current, goal, profile.rateLbWeek, anchor);
-  const observedGoalDate = goal == null || observedWeeklyChangeLb === null
-    || Math.abs(observedWeeklyChangeLb) < MIN_STABLE_GOAL_RATE_LB_WEEK
-    || (goal - current) * -observedWeeklyChangeLb <= 0
-    ? null
-    : goalDateFromPace(current, goal, Math.abs(observedWeeklyChangeLb), anchor);
-
   const dayGap = (from: string, to: string): number =>
     Math.round((parseLocalDate(to).getTime() - parseLocalDate(from).getTime()) / 86400000);
   const holdPlanDays = planGoalDate ? dayGap(anchor, planGoalDate) : null;
-  // The average that actually holds the date is the one sustained across the whole remaining
-  // span. A figure held for a few weeks and then abandoned does not hold anything.
+  // A completed week contributes one finite balance. Date drift applies that balance once and
+  // then resumes the saved pace; extrapolating the week's average forever would turn a few
+  // thousand accrued calories into a months-long claim the week itself did not cause.
+  const plannedDailyEnergy = Math.abs(profile.rateLbWeek) * 3500 / 7;
+  const goalDirectedDifference = profile.goalType === "gain" ? -difference : difference;
+  const rawDriftDays = plannedDailyEnergy > 0 ? Math.round(goalDirectedDifference / plannedDailyEnergy) : null;
+  const rawAdjustedGoalDate = planGoalDate && maintenance !== null && rawDriftDays !== null
+    ? shiftDate(planGoalDate, rawDriftDays)
+    : null;
+  const adjustedGoalDate = rawAdjustedGoalDate && rawAdjustedGoalDate < anchor ? anchor : rawAdjustedGoalDate;
+  const goalDateDriftDays = planGoalDate && adjustedGoalDate ? dayGap(planGoalDate, adjustedGoalDate) : null;
+
+  // Holding the original date means spreading only the accrued food balance across every day
+  // still left. Recent exercise is intentionally not added to the food guide: it was evidence
+  // about the completed week, not permission to eat more for the rest of the plan.
   const holdPlanDailyGuide = goal != null && maintenance !== null && holdPlanDays != null && holdPlanDays > 0
-    ? maintenance + averageExercise - Math.abs(current - goal) * 3500 / holdPlanDays
+    ? guide - difference / holdPlanDays
     : null;
 
   return {
@@ -475,8 +485,8 @@ export const weekBalance = (state: AppState, anchor = isoDate()): WeekBalance | 
     catchUpReachable: catchUpDailyGuide >= calorieFloor(profile),
     observedWeeklyChangeLb,
     planGoalDate,
-    observedGoalDate,
-    goalDateDriftDays: planGoalDate && observedGoalDate ? dayGap(planGoalDate, observedGoalDate) : null,
+    adjustedGoalDate,
+    goalDateDriftDays,
     holdPlanDailyGuide,
     holdPlanDays,
   };

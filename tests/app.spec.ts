@@ -393,7 +393,7 @@ describe("steering the week", () => {
     expect(root.querySelector(".progress-page > section")?.className).toContain("steer");
   });
 
-  it("moves the finish date when the week cannot take the calories back", () => {
+  it("explains the finite finish-date cost when the next week cannot take the calories back", () => {
     const state = steerState([2300, 2300, 2300, 2300, 2300, 2300, 2300]);
     const balance = weekBalance(state)!;
     const root = mount(state);
@@ -401,10 +401,12 @@ describe("steering the week", () => {
 
     const text = steerText(root);
     expect(text).toContain("4,900");
-    expect(text).toContain("more than one week can take back");
-    expect(text).toContain("finish date moves from");
+    expect(text).toContain("more than the next week can take back");
+    expect(text).toContain("Go back to your usual");
+    expect(text).toContain(`adds about ${balance.goalDateDriftDays} days`);
+    expect(text).not.toContain("from here on");
     expect(text).toContain(formatDate(balance.planGoalDate!));
-    expect(text).toContain(formatDate(balance.observedGoalDate!));
+    expect(text).toContain(formatDate(balance.adjustedGoalDate!));
     expect(text.toLowerCase()).not.toMatch(/streak|failed|failure/);
   });
 
@@ -502,12 +504,37 @@ describe("the weight chart", () => {
     // Every weigh-in is a point on the line that actually happened.
     expect(root.querySelectorAll(".chart-dots circle")).toHaveLength(2);
 
-    // Falling behind the plan means ending at a heavier weight, drawn higher on the chart.
-    // SVG y grows downward, so the trend's end point must sit at a smaller y than the plan's.
+    // Falling behind means the orange line reaches the same goal farther to the right.
     const planPoints = plan.getAttribute("points")!;
     const trendPoints = trend.getAttribute("points")!;
-    expect(yAt(trendPoints, 1)).toBeLessThan(yAt(planPoints, 1));
+    expect(Number(trendPoints.trim().split(/\s+/)[1]!.split(",")[0]))
+      .toBeGreaterThan(Number(planPoints.trim().split(/\s+/)[1]!.split(",")[0]));
+    expect(yAt(trendPoints, 1)).toBe(yAt(planPoints, 1));
     expect(root.querySelector(".chart-note")?.textContent).toContain("what this week changed");
+  });
+
+  it("runs the time axis from the first check-in through the later finish date", () => {
+    const today = isoDate();
+    const state = steerState([1800, 1800, 1800, 1800, 1800, 1800, 1800]);
+    state.profile.sexForEquation = "male";
+    state.profile.rateLbWeek = paceFromDailyGuide(planProfile(state), 1500)!;
+    const firstDate = shiftDate(today, -30);
+    state.weights.push({ id: "w0", date: firstDate, weightLb: 202, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+    const projection = weightProjection(state)!;
+    const planGoalDate = goalDateFromPace(196, 160, state.profile.rateLbWeek, today)!;
+    expect(projection.goalDate!.localeCompare(planGoalDate)).toBeGreaterThan(0);
+
+    const root = mount(state);
+    root.querySelector<HTMLElement>('[data-action="view"][data-view="trend"]')!.click();
+    const labels = [...root.querySelectorAll(".date-label")].map((label) => label.textContent);
+    expect(labels[0]).toBe(formatDate(firstDate));
+    expect(labels.at(-1)).toBe(formatDate(projection.goalDate!));
+
+    const planPoints = root.querySelector(".chart-line-plan")!.getAttribute("points")!.trim().split(/\s+/);
+    const trendPoints = root.querySelector(".chart-line-trend")!.getAttribute("points")!.trim().split(/\s+/);
+    expect(Number(trendPoints.at(-1)!.split(",")[0])).toBe(935);
+    expect(Number(planPoints.at(-1)!.split(",")[0])).toBeLessThan(935);
+    expect(root.querySelector(".chart-stage svg")?.getAttribute("aria-label")).toContain(formatDate(projection.goalDate!));
   });
 
   it("says what to do instead of showing an empty frame when nothing is weighed", () => {
@@ -635,7 +662,7 @@ describe("calorie trends and exercise", () => {
     expect(root.querySelector(".forecast-kpi.date b")?.textContent).not.toBe("—");
   });
 
-  it("does not count weight gain as progress or extend the recent estimate to the goal", () => {
+  it("does not count weight gain as progress while showing the recent estimate's full timeline", () => {
     const today = isoDate();
     const state = createState(today);
     Object.assign(state.profile, { onboardingComplete: true, age: 35, sexForEquation: "female", heightIn: 66, weightLb: 196, goalWeightLb: 160, activityPAL: 1.4, goalType: "lose", rateLbWeek: 1 });
@@ -656,8 +683,9 @@ describe("calorie trends and exercise", () => {
     expect(root.querySelector(".forecast-copy h2")?.textContent).toContain(formatDate(planDate));
     expect(root.querySelector(".forecast-copy h2")?.textContent).not.toContain(formatDate(recentGoalDate!));
     expect(root.querySelector(".forecast-kpi.date b")?.textContent).toBe(formatDate(planDate));
-    expect(root.querySelector(".trend-chart")?.outerHTML).toContain("90 days ahead");
-    // The chart shows where this week points; it never draws a line all the way to the goal.
+    expect(root.querySelector(".chart-stage svg")?.getAttribute("aria-label")).toContain(formatDate(recentGoalDate!));
+    expect([...root.querySelectorAll(".date-label")].at(-1)?.textContent).toBe(formatDate(recentGoalDate!));
+    // The chart's recent line reaches its own finish while the saved-plan headline stays separate.
     expect(root.querySelector(".chart-legend")?.textContent).toContain("Where this week points");
   });
 

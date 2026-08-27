@@ -224,11 +224,14 @@ export class DaybookApp {
       if (balance.catchUpReachable) {
         headline = `${over} Eat about <em>${fmt(balance.catchUpDailyGuide)}</em> a day this week and you are even again.`;
         support = `That is ${fmt(guide - balance.catchUpDailyGuide)} a day less than your usual ${fmt(guide)}, for seven days.`;
-      } else if (balance.planGoalDate && balance.observedGoalDate) {
-        headline = `${over} That is more than one week can take back, so your finish date moves from ${formatDate(balance.planGoalDate)} to ${formatDate(balance.observedGoalDate)}.`;
+      } else if (balance.planGoalDate && balance.adjustedGoalDate) {
+        const drift = Math.max(0, balance.goalDateDriftDays ?? 0);
+        headline = `${over} That is more than the next week can take back within this app's minimum. Go back to your usual ${fmt(guide)} a day now and it adds about ${fmt(drift)} ${drift === 1 ? "day" : "days"}, moving your finish from ${formatDate(balance.planGoalDate)} to ${formatDate(balance.adjustedGoalDate)}.`;
         support = balance.holdPlanDailyGuide !== null && balance.holdPlanDailyGuide >= calorieFloor(planProfile(this.state))
-          ? `To keep the older date you would need about ${fmt(balance.holdPlanDailyGuide)} calories a day from here on.`
-          : "There is no safe way to keep the older date, so pick a gentler pace or a later one.";
+          ? `Keeping the older date would mean about ${fmt(balance.holdPlanDailyGuide)} calories a day from now until then.`
+          : balance.holdPlanDailyGuide !== null
+            ? `Keeping the older date would mean about ${fmt(balance.holdPlanDailyGuide)} a day, below this app's ${fmt(calorieFloor(planProfile(this.state)))}-calorie minimum. Going lower is something to discuss with a doctor.`
+            : "Keep your usual plan and use the later date.";
       } else {
         headline = `${over} That is more than one week can take back, so this will take longer than planned.`;
         support = "Ease back toward your usual amount and the week ahead will do the rest.";
@@ -420,28 +423,34 @@ export class DaybookApp {
       return sparse("Your lines will appear here", "Check in your weight and this chart starts drawing what actually happened.");
     }
 
-    const horizonDays = 90;
+    const fallbackHorizonDays = 90;
     const goal = this.state.profile.goalWeightLb;
     const profile = planProfile(this.state);
     const origin = weights[0]!.date < today ? weights[0]!.date : today;
     const dayOf = (date: string): number =>
       Math.round((parseLocalDate(date).getTime() - parseLocalDate(origin).getTime()) / 86400000);
-    const lastDay = Math.max(1, dayOf(shiftDate(today, horizonDays)));
-
     const realSeries = weights.map((weight) => ({ day: dayOf(weight.date), weight: weight.weightLb }));
 
-    // The plan line runs at the saved pace until it reaches the goal or the chart runs out.
+    // The time axis covers the whole plan. When this week's sustained trend reaches the goal
+    // later, include that date too; 90 days is only a fallback when there is no finish date.
     const planSeries: { day: number; weight: number }[] = [];
     const planGoalDate = goal == null ? null : goalDateFromPace(current, goal, profile.rateLbWeek, today);
+    const datedEnds = [planGoalDate, projection?.goalDate].filter((date): date is string => Boolean(date));
+    const chartEndDate = datedEnds.length
+      ? datedEnds.reduce((latest, date) => date > latest ? date : latest, today)
+      : shiftDate(today, fallbackHorizonDays);
+    const lastDay = Math.max(1, dayOf(chartEndDate));
     if (goal != null && profile.rateLbWeek > 0 && profile.goalType !== "maintain" && planGoalDate) {
-      const endDay = Math.min(lastDay, dayOf(planGoalDate));
-      const direction = goal > current ? 1 : -1;
-      const endWeight = endDay === dayOf(planGoalDate) ? goal : current + direction * profile.rateLbWeek * endDay / 7;
-      planSeries.push({ day: dayOf(today), weight: current }, { day: endDay, weight: endWeight });
+      planSeries.push({ day: dayOf(today), weight: current }, { day: dayOf(planGoalDate), weight: goal });
     }
 
+    const trendEndDate = projection?.goalDate ?? chartEndDate;
+    const trendDays = dayOf(trendEndDate) - dayOf(today);
     const trendSeries = projection
-      ? [{ day: dayOf(today), weight: current }, { day: lastDay, weight: current - projection.weeklyChangeLb * horizonDays / 7 }]
+      ? [{ day: dayOf(today), weight: current }, {
+        day: dayOf(trendEndDate),
+        weight: projection.goalDate && goal != null ? goal : current - projection.weeklyChangeLb * trendDays / 7,
+      }]
       : [];
 
     const plotted = [...realSeries, ...planSeries, ...trendSeries].map((point) => point.weight);
@@ -474,7 +483,7 @@ export class DaybookApp {
         : `<p class="chart-note">Add a goal weight and a weekly pace to see your plan alongside this.</p>`
       : `<p class="chart-note">Log seven days in a row and a third line will show where that week points.</p>`;
 
-    const described = `Weight chart from ${fmt(this.displayWeight(realSeries[0]!.weight), 1)} ${this.weightUnit()} to ${fmt(this.displayWeight(current), 1)} ${this.weightUnit()} today, looking ${horizonDays} days ahead`;
+    const described = `Weight chart from ${formatDate(origin)} through ${formatDate(chartEndDate)}, showing ${fmt(this.displayWeight(realSeries[0]!.weight), 1)} ${this.weightUnit()} at the first check-in and ${fmt(this.displayWeight(current), 1)} ${this.weightUnit()} today`;
     return `<section class="trend-chart card">${title}${legend}<div class="chart-stage"><svg viewBox="0 0 1000 205" role="img" aria-label="${html(described)}"><g class="chart-grid">${grid}</g>${plan}${trend}${real}${dateLabels}</svg></div>${note}</section>`;
   }
 
