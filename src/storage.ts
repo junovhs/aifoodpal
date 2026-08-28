@@ -38,6 +38,13 @@ export const migrateState = (value: unknown): AppState => {
     weights: Array.isArray(input.weights) ? input.weights : [],
     exercises: Array.isArray(input.exercises) ? input.exercises : [],
   };
+  const recovery = state.prefs.recoveryPlan;
+  if (recovery && (
+    !recovery.startedOn || !recovery.endsOn || recovery.endsOn < recovery.startedOn
+    || !Number.isFinite(recovery.baseDailyGuide) || recovery.baseDailyGuide <= 0
+    || !Number.isFinite(recovery.dailyReduction) || recovery.dailyReduction < 0
+    || !Number.isFinite(recovery.balanceCalories) || recovery.balanceCalories <= 0
+  )) state.prefs.recoveryPlan = null;
   backfillEntryNutrition(state);
   // States saved before the plan recorded its own starting weight (DEC-05) infer one once,
   // here, so the running app only ever reads a stored fact.

@@ -162,8 +162,54 @@ export const dailyCalorieGuide = (profile: Profile): number | null =>
   calorieGuidance(profile).target
   ?? (profile.manualDailyGuide && profile.manualDailyGuide > 0 ? profile.manualDailyGuide : null);
 
-export const nutritionTargets = (profile: Profile): NutritionTargets | null => {
-  const calories = dailyCalorieGuide(profile);
+/**
+ * Render-ready progress for a temporary recovery plan: actual food/activity credit, what
+ * remains, and today's floor-bounded cap. It is derived from AppState and never persisted.
+ */
+export interface RecoveryStatus {
+  recoveredCalories: number;
+  remainingCalories: number;
+  targetToday: number;
+  complete: boolean;
+}
+
+/** Progress against a temporary adjustment without changing the saved plan itself. */
+export const recoveryStatus = (state: AppState, anchor = isoDate()): RecoveryStatus | null => {
+  const recovery = state.prefs.recoveryPlan;
+  if (!recovery) return null;
+  const current = latestWeight(state);
+  const foodEnd = shiftDate(anchor < isoDate() ? anchor : isoDate(), -1);
+  const completedFoodDates = new Set(state.entries
+    .filter((entry) => entry.date >= recovery.startedOn && entry.date <= recovery.endsOn && entry.date <= foodEnd)
+    .map((entry) => entry.date));
+  const recoveredFromFood = [...completedFoodDates]
+    .reduce((sum, date) => sum + Math.max(0, recovery.baseDailyGuide - totalsFor(state, date).calories), 0);
+  const recoveredFromActivity = current == null ? 0 : state.exercises
+    .filter((entry) => entry.date >= recovery.startedOn && entry.date <= recovery.endsOn && entry.date <= anchor)
+    .reduce((sum, entry) => sum + exerciseCalories(entry.kind, entry.minutes, current), 0);
+  const recoveredCalories = Math.min(recovery.balanceCalories, recoveredFromFood + recoveredFromActivity);
+  const remainingCalories = Math.max(0, recovery.balanceCalories - recoveredCalories);
+  const scheduled = anchor >= recovery.startedOn && anchor <= recovery.endsOn;
+  const reduction = scheduled ? Math.min(recovery.dailyReduction, remainingCalories) : 0;
+  return {
+    recoveredCalories,
+    remainingCalories,
+    targetToday: Math.max(calorieFloor(planProfile(state)), recovery.baseDailyGuide - reduction),
+    complete: remainingCalories < 1,
+  };
+};
+
+/** The real calorie cap for one diary date, including an active temporary recovery schedule. */
+export const dailyCalorieGuideFor = (state: AppState, date: string): number | null => {
+  const base = dailyCalorieGuide(planProfile(state));
+  const recovery = state.prefs.recoveryPlan;
+  if (!base || !recovery || date < recovery.startedOn || date > recovery.endsOn) return base;
+  const status = recoveryStatus(state, date);
+  return status?.complete ? base : status?.targetToday ?? base;
+};
+
+export const nutritionTargets = (profile: Profile, calorieOverride?: number | null): NutritionTargets | null => {
+  const calories = calorieOverride ?? dailyCalorieGuide(profile);
   if (!calories) return null;
   if (profile.nutritionPlanMode === "custom" && profile.customNutritionTargets) return profile.customNutritionTargets;
   const currentKg = profile.weightLb ? poundsToKg(profile.weightLb) : 0;
@@ -394,9 +440,12 @@ export interface WeekBalance {
   observedWeeklyChangeLb: number | null;
   /** The goal date the saved plan points to. */
   planGoalDate: string | null;
-  /** The goal date the window's own behaviour points to. */
-  observedGoalDate: string | null;
-  /** Days the observed date sits later than the plan date. Negative means ahead of plan. */
+  /**
+   * The saved goal date after applying this window's accrued calorie balance once, then
+   * returning to the saved pace. This does not assume the window's intake continues forever.
+   */
+  adjustedGoalDate: string | null;
+  /** Days the accrued balance moves the saved date. Negative means ahead of plan. */
   goalDateDriftDays: number | null;
   /**
    * The daily average, sustained for the whole remaining span, that still lands on the plan
@@ -426,39 +475,50 @@ export const weekBalance = (state: AppState, anchor = isoDate()): WeekBalance | 
   const logged = dates.filter((date) => state.entries.some((entry) => entry.date === date));
   const loggedCalories = logged.reduce((sum, date) => sum + totalsFor(state, date).calories, 0);
   const budgetedCalories = guide * logged.length;
-  const difference = loggedCalories - budgetedCalories;
+  const windowExerciseTotal = state.exercises
+    .filter((entry) => entry.date >= windowStart && entry.date <= windowEnd)
+    .reduce((sum, entry) => sum + exerciseCalories(entry.kind, entry.minutes, current), 0);
+  // Activity already completed today can start rebalancing immediately even though today's
+  // food is still partial and excluded from the seven completed-day window.
+  const repaymentExerciseTotal = state.exercises
+    .filter((entry) => entry.date >= windowStart && entry.date <= anchor)
+    .reduce((sum, entry) => sum + exerciseCalories(entry.kind, entry.minutes, current), 0);
+  const difference = loggedCalories - budgetedCalories - repaymentExerciseTotal;
   const borrowedCalories = Math.max(0, difference);
   const savedCalories = Math.max(0, -difference);
   const catchUpDailyGuide = guide - borrowedCalories / REPAYMENT_DAYS;
-
-  const exerciseTotal = state.exercises
-    .filter((entry) => entry.date >= windowStart && entry.date <= windowEnd)
-    .reduce((sum, entry) => sum + exerciseCalories(entry.kind, entry.minutes, current), 0);
   // Without a body baseline there is no maintenance to measure intake against, so the window
   // says nothing about weight. A guide can still exist here as a legacy manual figure, and
   // inferring a pace from it would be inventing evidence.
   const maintenance = maintenanceCalories(profile);
   const averageIntake = logged.length ? loggedCalories / logged.length : guide;
-  const averageExercise = logged.length ? exerciseTotal / logged.length : 0;
+  const averageExercise = logged.length ? windowExerciseTotal / logged.length : 0;
   const observedWeeklyChangeLb = maintenance === null
     ? null
     : (maintenance + averageExercise - averageIntake) * 7 / 3500;
 
   const goal = profile.goalWeightLb;
   const planGoalDate = goal == null ? null : goalDateFromPace(current, goal, profile.rateLbWeek, anchor);
-  const observedGoalDate = goal == null || observedWeeklyChangeLb === null
-    || Math.abs(observedWeeklyChangeLb) < MIN_STABLE_GOAL_RATE_LB_WEEK
-    || (goal - current) * -observedWeeklyChangeLb <= 0
-    ? null
-    : goalDateFromPace(current, goal, Math.abs(observedWeeklyChangeLb), anchor);
-
   const dayGap = (from: string, to: string): number =>
     Math.round((parseLocalDate(to).getTime() - parseLocalDate(from).getTime()) / 86400000);
   const holdPlanDays = planGoalDate ? dayGap(anchor, planGoalDate) : null;
-  // The average that actually holds the date is the one sustained across the whole remaining
-  // span. A figure held for a few weeks and then abandoned does not hold anything.
+  // A completed week contributes one finite balance. Date drift applies that balance once and
+  // then resumes the saved pace; extrapolating the week's average forever would turn a few
+  // thousand accrued calories into a months-long claim the week itself did not cause.
+  const plannedDailyEnergy = Math.abs(profile.rateLbWeek) * 3500 / 7;
+  const goalDirectedDifference = profile.goalType === "gain" ? -difference : difference;
+  const rawDriftDays = plannedDailyEnergy > 0 ? Math.round(goalDirectedDifference / plannedDailyEnergy) : null;
+  const rawAdjustedGoalDate = planGoalDate && maintenance !== null && rawDriftDays !== null
+    ? shiftDate(planGoalDate, rawDriftDays)
+    : null;
+  const adjustedGoalDate = rawAdjustedGoalDate && rawAdjustedGoalDate < anchor ? anchor : rawAdjustedGoalDate;
+  const goalDateDriftDays = planGoalDate && adjustedGoalDate ? dayGap(planGoalDate, adjustedGoalDate) : null;
+
+  // Holding the original date means spreading only the accrued food balance across every day
+  // still left. Recent exercise is intentionally not added to the food guide: it was evidence
+  // about the completed week, not permission to eat more for the rest of the plan.
   const holdPlanDailyGuide = goal != null && maintenance !== null && holdPlanDays != null && holdPlanDays > 0
-    ? maintenance + averageExercise - Math.abs(current - goal) * 3500 / holdPlanDays
+    ? guide - difference / holdPlanDays
     : null;
 
   return {
@@ -475,8 +535,8 @@ export const weekBalance = (state: AppState, anchor = isoDate()): WeekBalance | 
     catchUpReachable: catchUpDailyGuide >= calorieFloor(profile),
     observedWeeklyChangeLb,
     planGoalDate,
-    observedGoalDate,
-    goalDateDriftDays: planGoalDate && observedGoalDate ? dayGap(planGoalDate, observedGoalDate) : null,
+    adjustedGoalDate,
+    goalDateDriftDays,
     holdPlanDailyGuide,
     holdPlanDays,
   };
