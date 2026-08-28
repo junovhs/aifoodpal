@@ -602,11 +602,20 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); backgro
 
 /* Today is the one dashboard that must fit the iPhone 11 Safari budget without scrolling. */
 .view.today-view { overflow: hidden; padding-bottom: max(8px, env(safe-area-inset-bottom)); }
-.today-screen { display: grid; grid-template-rows: 44px minmax(176px, 1fr) auto 52px; gap: 8px; height: 100%; min-height: 0; }
+.today-screen { display: grid; grid-template-rows: 44px 68px auto 52px; align-content: start; gap: 8px; height: 100%; min-height: 0; }
 .today-date { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px auto; align-items: center; gap: 4px; }
 .today-date h1 { overflow: hidden; margin: 0; font: 600 19px/1.1 Georgia, "Times New Roman", serif; letter-spacing: -.025em; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
 .today-date .icon-btn { width: 44px; min-height: 44px; border-color: transparent; background: transparent; }
 .today-date .today-btn { min-height: 44px; }
+.today-summary-trigger { appearance: none; display: grid; grid-template-columns: minmax(0, 1fr) 20px; align-items: center; gap: 12px; min-height: 68px; padding: 10px 15px; border: 1px solid var(--line); border-radius: 15px; background: radial-gradient(circle at 100% 0, var(--accent-soft), transparent 9rem), var(--panel); color: var(--text); box-shadow: var(--shadow-sm); text-align: left; }
+.today-summary-trigger:hover { border-color: color-mix(in oklch, var(--accent) 36%, var(--line)); background-color: var(--panel-muted); }
+.today-summary-trigger > span { display: grid; gap: 4px; min-width: 0; }
+.today-summary-trigger strong { overflow: hidden; font: 600 17px/1.15 Georgia, "Times New Roman", serif; text-overflow: ellipsis; white-space: nowrap; }
+.today-summary-trigger small { color: var(--text-soft); font-size: 10px; }
+.today-summary-trigger > .icon { width: 18px; height: 18px; color: var(--accent-dark); }
+.today-summary-details { display: grid; gap: 12px; }
+.today-summary-details .steer { margin: 0; }
+.today-summary-modal { width: min(620px, 100%); }
 .today-hero { display: grid; align-content: center; min-height: 0; padding: 10px 18px 12px; overflow: hidden; border: 1px solid var(--line); border-radius: 18px; background: radial-gradient(circle at 90% 0, var(--accent-soft), transparent 11rem), var(--panel); box-shadow: var(--shadow-sm); }
 .today-remaining { display: grid; justify-items: center; line-height: 1; }
 .today-remaining strong { font: 650 clamp(43px, 11vw, 58px)/.92 Georgia, "Times New Roman", serif; letter-spacing: -.055em; font-variant-numeric: tabular-nums; }
@@ -623,7 +632,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); backgro
 .macro-values { display: flex; align-items: baseline; justify-content: space-between; gap: 4px; color: var(--muted); font-size: 9px; font-variant-numeric: tabular-nums; }
 .macro-values strong { color: var(--text); font-size: 11px; font-weight: 700; }
 .today-hero .macroline { height: 4px; margin-top: 3px; }
-.today-meals { display: grid; overflow: hidden; border: 1px solid var(--line); border-radius: 15px; background: var(--panel); box-shadow: var(--shadow-sm); }
+.today-meals { display: grid; grid-auto-rows: 56px; overflow: hidden; border: 1px solid var(--line); border-radius: 15px; background: var(--panel); box-shadow: var(--shadow-sm); }
 .meal-row { appearance: none; display: grid; grid-template-columns: 36px minmax(0, 1fr) auto 20px; align-items: center; gap: 10px; min-height: 56px; padding: 0 12px; border: 0; background: transparent; color: var(--text); text-align: left; }
 .meal-row + .meal-row { border-top: 1px solid var(--line-soft); }
 .meal-row:hover { background: var(--panel-muted); }
@@ -641,6 +650,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); backgro
 .meal-view-add { width: min(100%, 360px); min-height: 52px; margin-inline: auto; text-transform: capitalize; }
 
 @media (max-width: 700px) {
-  .today-screen { grid-template-rows: 44px minmax(176px, 1fr) 224px 52px; }
+  .today-screen { grid-template-rows: 44px 68px auto 52px; }
   .today-date .today-btn { min-width: 58px; min-height: 44px; }
+  .today-summary-modal .today-hero { min-height: 184px; }
 }

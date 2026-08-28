@@ -440,8 +440,9 @@ describe("steering the week", () => {
     expect(steerText(root)).toContain("The 3 days you logged this week");
   });
 
-  it("shows the same sentence on Today, above the numbers", () => {
+  it("shows the same sentence in Today's compact details", () => {
     const root = mount(steerState([1232, 1768, 1677, 1738, 1784, 2442, 1720]));
+    root.querySelector<HTMLElement>('[data-action="open-today-summary"]')!.click();
     const text = steerText(root);
     expect(text).toContain("1,161");
     expect(text).toContain("1,434");
@@ -909,6 +910,7 @@ describe("protected snack budget", () => {
 
     new DaybookApp(root, repository).start();
 
+    root.querySelector<HTMLElement>('[data-action="open-today-summary"]')!.click();
     expect(root.querySelector(".today-warning")?.textContent).toContain("100 protected snack kcal used by main meals");
     expect(root.querySelector(".today-remaining")?.textContent).toContain("200");
     expect(root.querySelector('form[data-form="snack-budget"]')).toBeNull();
@@ -941,6 +943,7 @@ describe("protected snack budget", () => {
     const root = document.createElement("main");
     new DaybookApp(root, { load: () => state, save: vi.fn() }).start();
 
+    root.querySelector<HTMLElement>('[data-action="open-today-summary"]')!.click();
     expect(root.querySelector(".today-warning")).toBeNull();
     expect(root.querySelector(".today-remaining")?.textContent).toContain("300");
   });
@@ -992,9 +995,9 @@ describe("Today phone layout", () => {
     new DaybookApp(root, { load: () => state, save: vi.fn() }).start();
 
     expect(root.querySelector(".view")?.classList.contains("today-view")).toBe(true);
-    expect(root.querySelector(".today-remaining strong")?.textContent).toBe("1,280");
-    expect(root.querySelector(".today-progress-label")?.textContent).toContain("720 of 2,000 kcal");
-    expect(root.querySelectorAll(".today-hero .macro")).toHaveLength(4);
+    const summary = root.querySelector<HTMLElement>('.today-summary-trigger[data-action="open-today-summary"]')!;
+    expect(summary.textContent).toContain("1,280 calories left on Friday, Aug 21");
+    expect(summary.textContent).toContain("See weekly balance and nutrients");
     const rows = [...root.querySelectorAll<HTMLElement>(".meal-row")];
     expect(rows.map((row) => row.dataset.period)).toEqual(["breakfast", "lunch", "dinner", "snacks"]);
     expect(rows.every((row) => row.dataset.action === "open-meal")).toBe(true);
@@ -1003,13 +1006,45 @@ describe("Today phone layout", () => {
     expect(root.querySelector('.today-screen form[data-form="snack-budget"]')).toBeNull();
     expect(root.querySelector('.today-add[data-action="choose-food"]')?.textContent).toContain("Add food");
 
-    rows[1]!.click();
+    summary.click();
+    expect(root.querySelector('.today-summary-modal[role="dialog"]')).not.toBeNull();
+    expect(root.querySelector("#today-summary-title")?.textContent).toBe("Friday, Aug 21 details");
+    expect(root.querySelector(".today-remaining strong")?.textContent).toBe("1,280");
+    expect(root.querySelector(".today-progress-label")?.textContent).toContain("720 of 2,000 kcal");
+    expect(root.querySelectorAll(".today-summary-modal .macro")).toHaveLength(4);
+    expect(root.querySelector(".today-summary-modal .steer")?.textContent).toContain("week");
+    root.querySelector<HTMLElement>('.today-summary-modal [data-action="close"]')!.click();
+    expect(root.querySelector(".today-summary-modal")).toBeNull();
+
+    root.querySelectorAll<HTMLElement>(".meal-row")[1]!.click();
     expect(root.querySelector(".meal-view h1")?.textContent).toBe("lunch");
     expect(root.querySelectorAll(".meal-view .entry")).toHaveLength(1);
     expect(root.querySelector(".meal-view")?.textContent).toContain("Everyday meal");
     expect(root.querySelector(".meal-view-add")?.textContent).toContain("Add to lunch");
     root.querySelector<HTMLElement>('[data-action="back-today"]')!.click();
     expect(root.querySelector(".today-screen")).not.toBeNull();
+  });
+
+  it("moves focus into the details dialog, traps Tab, closes on Escape, and returns focus", async () => {
+    const state = createState("2026-08-21");
+    Object.assign(state.profile, { onboardingComplete: true, manualDailyGuide: 2000 });
+    const root = document.createElement("main");
+    document.body.append(root);
+    new DaybookApp(root, { load: () => state, save: vi.fn() }).start();
+
+    const summary = root.querySelector<HTMLElement>('[data-action="open-today-summary"]')!;
+    summary.focus();
+    summary.click();
+    await Promise.resolve();
+    const close = root.querySelector<HTMLElement>('.today-summary-modal [data-action="close"]')!;
+    expect(document.activeElement).toBe(close);
+    close.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+    expect(document.activeElement).toBe(close);
+    close.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await Promise.resolve();
+    expect(root.querySelector(".today-summary-modal")).toBeNull();
+    expect(document.activeElement).toBe(root.querySelector('[data-action="open-today-summary"]'));
+    root.remove();
   });
 });
 

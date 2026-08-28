@@ -24,7 +24,7 @@ export interface FoodCaptureDeps {
   /** The free path: decode a barcode and look the product up before any AI spend. */
   scan: (image: Blob) => Promise<BarcodeResult>;
 }
-type Modal = FoodModal | { kind: "combo"; error?: string } | { kind: "quick"; calories: number; period: Period } | { kind: "choose"; period?: Period } | { kind: "log"; food: Food; period?: Period } | { kind: "delete-food"; food: Food } | { kind: "delete-weight"; weight: Weight } | { kind: "weight" } | { kind: "exercise" } | { kind: "backup" } | { kind: "ai"; stage: "request" | "prompt" | "reply" | "preview"; prompt?: string; response?: AiResponse } | null;
+type Modal = FoodModal | { kind: "combo"; error?: string } | { kind: "quick"; calories: number; period: Period } | { kind: "choose"; period?: Period } | { kind: "log"; food: Food; period?: Period } | { kind: "today-summary" } | { kind: "delete-food"; food: Food } | { kind: "delete-weight"; weight: Weight } | { kind: "weight" } | { kind: "exercise" } | { kind: "backup" } | { kind: "ai"; stage: "request" | "prompt" | "reply" | "preview"; prompt?: string; response?: AiResponse } | null;
 
 const html = (value: unknown): string => String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;");
 const fmt = (value: number | null | undefined, digits = 0): string => value == null ? "?" : new Intl.NumberFormat(undefined, { maximumFractionDigits: digits }).format(value);
@@ -80,6 +80,7 @@ export class DaybookApp {
     this.root.addEventListener("submit", (event) => this.onSubmit(event));
     this.root.addEventListener("change", (event) => this.onChange(event));
     this.root.addEventListener("input", (event) => this.onInput(event));
+    this.root.addEventListener("keydown", (event) => this.onKeydown(event));
     this.account?.start(() => this.renderAccount());
     if (this.repository instanceof CloudStateRepository) {
       this.syncStatus = this.repository.getStatus();
@@ -269,9 +270,22 @@ export class DaybookApp {
     const date = this.state.prefs.date;
     const totals = totalsFor(this.state, date);
     const guide = dailyCalorieGuide(planProfile(this.state));
+    const meals = PERIODS.map((period) => this.meal(period, date)).join("");
+    const remaining = guide ? Math.max(0, guide - totals.calories) : null;
+    const when = date === isoDate() ? "today" : `on ${formatDate(date, true)}`;
+    const summary = remaining === null
+      ? `${fmt(totals.calories)} calories logged ${when}.`
+      : `${fmt(remaining)} calories left ${when}.`;
+    return `<div class="today-screen"><div class="today-date"><button class="icon-btn" data-action="date" data-days="-1" aria-label="Previous day">${icon("ChevronLeft")}</button><h1>${formatDate(date, true)}</h1><button class="icon-btn" data-action="date" data-days="1" aria-label="Next day">${icon("ChevronRight")}</button><button class="today-btn" data-action="today">Today</button></div><button class="today-summary-trigger" data-action="open-today-summary" aria-haspopup="dialog"><span><strong>${summary}</strong><small>See weekly balance and nutrients</small></span>${icon("ChevronRight")}</button><div class="today-meals" aria-label="Meals">${meals}</div><button class="btn-primary btn-icon today-add" data-action="choose-food">${icon("Plus")}<span>Add food</span></button></div>`;
+  }
+
+  /** The detailed figures stay available on phones without consuming the meal list's viewport. */
+  private todaySummaryDetails(): string {
+    const date = this.state.prefs.date;
+    const totals = totalsFor(this.state, date);
+    const guide = dailyCalorieGuide(planProfile(this.state));
     const targets = nutritionTargets(planProfile(this.state));
     const pct = guide ? Math.min(100, totals.calories / guide * 100) : 0;
-    const meals = PERIODS.map((period) => this.meal(period, date)).join("");
     const remaining = guide ? Math.max(0, guide - totals.calories) : null;
     const snackTotal = totalsFor(this.state, date, "snacks").calories;
     const snackProtected = Boolean(guide && this.state.prefs.protectedSnackBudgetEnabled);
@@ -280,7 +294,8 @@ export class DaybookApp {
       ? `<div class="today-warning">${fmt(budget.encroachmentCalories)} protected snack kcal used by main meals</div>`
       : "";
     const guideLine = guide ? `${fmt(totals.calories)} of ${fmt(guide)} kcal` : `${fmt(totals.calories)} kcal logged`;
-    return `<div class="today-screen"><div class="today-date"><button class="icon-btn" data-action="date" data-days="-1" aria-label="Previous day">${icon("ChevronLeft")}</button><h1>${formatDate(date, true)}</h1><button class="icon-btn" data-action="date" data-days="1" aria-label="Next day">${icon("ChevronRight")}</button><button class="today-btn" data-action="today">Today</button></div>${this.weekSteer()}<section class="today-hero" aria-label="Daily nutrition summary"><div class="today-remaining"><strong>${remaining == null ? "—" : fmt(remaining)}</strong><span>kcal remaining</span></div><div class="today-progress" role="progressbar" aria-label="${guideLine}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${fmt(pct)}"><span style="width:${pct}%"></span></div><div class="today-progress-label">${guideLine}</div>${budgetWarning}<div class="macros">${this.macro("protein", totals.proteinG, targets?.proteinG)}${this.macro("carbs", totals.carbsG, targets?.carbsG)}${this.macro("fat", totals.fatG, targets?.fatG)}${this.macro("fiber", totals.fiberG, targets?.fiberG)}</div></section><div class="today-meals" aria-label="Meals">${meals}</div><button class="btn-primary btn-icon today-add" data-action="choose-food">${icon("Plus")}<span>Add food</span></button></div>`;
+    const weekly = this.weekSteer() || `<section class="steer card" aria-label="How your week is going"><p class="steer-line">Your weekly balance will appear when your plan has enough information.</p><p class="steer-support">You can still use today’s calories and nutrients below.</p></section>`;
+    return `<div class="today-summary-details">${weekly}<section class="today-hero" aria-label="Daily nutrition summary"><div class="today-remaining"><strong>${remaining == null ? "—" : fmt(remaining)}</strong><span>kcal remaining</span></div><div class="today-progress" role="progressbar" aria-label="${guideLine}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${fmt(pct)}"><span style="width:${pct}%"></span></div><div class="today-progress-label">${guideLine}</div>${budgetWarning}<div class="macros">${this.macro("protein", totals.proteinG, targets?.proteinG)}${this.macro("carbs", totals.carbsG, targets?.carbsG)}${this.macro("fat", totals.fatG, targets?.fatG)}${this.macro("fiber", totals.fiberG, targets?.fiberG)}</div></section></div>`;
   }
 
   /** The diary that shipped before SHEL-01, kept for viewports with room to show entries inline. */
@@ -638,13 +653,18 @@ export class DaybookApp {
     if (this.modal.kind === "quick") body = this.quickCalorieForm(this.modal);
     if (this.modal.kind === "choose") body = `<div class="mhead"><div>choose a food</div>${this.close()}</div><div class="stack">${this.state.foods.map((food) => `<button class="searchitem" data-action="log" data-id="${food.id}"><span><span>${html(food.name)}</span><span class="tiny">${html(food.brand || food.serving.description)}</span></span><span>${fmt(food.nutrition.calories)} kcal</span></button>`).join("")}<button class="btn" data-action="new-food">create a new food</button></div>`;
     if (this.modal.kind === "log") body = this.logForm(this.modal.food, this.modal.period);
+    if (this.modal.kind === "today-summary") {
+      const title = this.state.prefs.date === isoDate() ? "Today’s details" : `${formatDate(this.state.prefs.date, true)} details`;
+      body = `<div class="mhead"><div><div id="today-summary-title">${title}</div><div class="tiny">Weekly balance and nutrients</div></div>${this.close()}</div>${this.todaySummaryDetails()}`;
+    }
     if (this.modal.kind === "delete-food") body = `<div class="mhead"><div>Delete saved food?</div>${this.close()}</div><div class="delete-confirm"><span class="delete-confirm-icon">${icon("Trash2")}</span><div><strong>${html(this.modal.food.name)}</strong><p>This removes it from your food library. Diary entries you already logged will stay intact.</p></div></div><div class="mfooter"><button class="btn" data-action="close">Cancel</button><button class="btn-danger btn-icon" data-action="confirm-delete-food" data-id="${this.modal.food.id}">${icon("Trash2")}<span>Delete food</span></button></div>`;
     if (this.modal.kind === "delete-weight") body = `<div class="mhead"><div>Delete weight entry?</div>${this.close()}</div><div class="delete-confirm"><span class="delete-confirm-icon">${icon("Trash2")}</span><div><strong>${fmt(this.displayWeight(this.modal.weight.weightLb), 1)} ${this.weightUnit()} · ${formatDate(this.modal.weight.date)}</strong><p>This removes this check-in from weight history and updates your current progress.</p></div></div><div class="mfooter"><button class="btn" data-action="close">Cancel</button><button class="btn-danger btn-icon" data-action="confirm-delete-weight" data-id="${this.modal.weight.id}">${icon("Trash2")}<span>Delete weight</span></button></div>`;
     if (this.modal.kind === "weight") body = `<form data-form="weight"><div class="mhead"><div>weight check-in</div>${this.close()}</div>${field(`weight (${this.weightUnit()})`, "weight", this.displayWeight(latestWeight(this.state)) ?? "", "number", "min=1 step=.1 required")}${field("date", "date", this.state.prefs.date, "date", "required")}<div class="mfooter"><button class="btn-primary">save</button></div></form>`;
     if (this.modal.kind === "exercise") body = `<form data-form="exercise"><div class="mhead"><div>add exercise</div>${this.close()}</div><div class="stack"><label class="field"><span>activity</span><select name="kind">${(Object.entries(EXERCISE_LABELS) as [ExerciseKind, string][]).map(([kind, label]) => `<option value="${kind}">${label}</option>`).join("")}</select></label>${field("minutes", "minutes", 20, "number", "min=1 max=600 step=1 required")}${field("date", "date", isoDate(), "date", "required")}<div class="notice">Calories are estimated from broad activity intensity and your latest weight. Log the workout even when it feels small—the trend matters more than precision.</div></div><div class="mfooter"><button class="btn-primary btn-icon">${icon("Dumbbell")}<span>add exercise</span></button></div></form>`;
     if (this.modal.kind === "backup") body = `<div class="mhead"><div>backup & restore</div>${this.close()}</div><div class="stack"><button class="btn" data-action="download">download backup</button><button class="btn" data-action="copy-backup">copy backup</button><form data-form="restore"><label class="field"><span>paste an AIfoodpal backup</span><textarea class="code" name="backup" required></textarea></label><div class="notice warn">Restore replaces this browser's current copy.</div><div class="mfooter"><button class="btn-primary">restore</button></div></form></div>`;
     if (this.modal.kind === "ai") body = this.aiModal(this.modal);
-    return `<div class="modalback show" data-action="backdrop"><div class="modal"><div class="modalin">${body}</div></div></div>`;
+    const modalA11y = this.modal.kind === "today-summary" ? ` role="dialog" aria-modal="true" aria-labelledby="today-summary-title"` : "";
+    return `<div class="modalback show" data-action="backdrop"><div class="modal ${this.modal.kind === "today-summary" ? "today-summary-modal" : ""}"${modalA11y}><div class="modalin">${body}</div></div></div>`;
   }
 
   private close(): string { return `<button class="close" data-action="close" aria-label="Close">${icon("X")}</button>`; }
@@ -713,7 +733,12 @@ export class DaybookApp {
     if (action === "calendar-month") { this.calendarMonth = shiftMonth(this.calendarMonth, Number(button.dataset.months)); this.render(); }
     if (action === "calendar-today") { this.calendarMonth = isoDate().slice(0, 7); this.render(); }
     if (action === "open-calendar-day") { this.state.prefs.date = String(button.dataset.date); this.calendarMonth = this.state.prefs.date.slice(0, 7); this.view = "day"; this.save(); }
-    if (action === "close" || action === "backdrop" && event.target === button) { this.modal = null; this.render(); }
+    if (action === "close" || action === "backdrop" && event.target === button) { this.closeModal(); }
+    if (action === "open-today-summary") {
+      this.modal = { kind: "today-summary" };
+      this.render();
+      queueMicrotask(() => this.root.querySelector<HTMLElement>('.today-summary-modal [data-action="close"]')?.focus());
+    }
     if (action === "new-food") { this.modal = { kind: "food" }; this.render(); }
     if (action === "build-combo" && this.state.foods.length >= 2) { this.modal = { kind: "combo" }; this.render(); }
     if (action === "edit-food") { const food = this.food(button.dataset.id); if (food) { this.modal = { kind: "food", food }; this.render(); } }
@@ -799,6 +824,30 @@ export class DaybookApp {
     this.modal.calories = Math.max(0, Math.round(Number(target.value) || 0));
     const label = this.root.querySelector<HTMLElement>(".quick-confirm span");
     if (label) label.textContent = `Log ${this.modal.calories} calories`;
+  }
+
+  /** Keep the phone details sheet keyboard-modal and return focus to its trigger on close. */
+  private onKeydown(event: KeyboardEvent): void {
+    if (this.modal?.kind !== "today-summary") return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      this.closeModal();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const controls = [...this.root.querySelectorAll<HTMLElement>('.today-summary-modal button:not([disabled]), .today-summary-modal [href], .today-summary-modal input:not([disabled]), .today-summary-modal select:not([disabled]), .today-summary-modal textarea:not([disabled]), .today-summary-modal [tabindex]:not([tabindex="-1"])')];
+    if (!controls.length) return;
+    const first = controls[0]!;
+    const last = controls.at(-1)!;
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+  }
+
+  private closeModal(): void {
+    const returnToSummary = this.modal?.kind === "today-summary";
+    this.modal = null;
+    this.render();
+    if (returnToSummary) queueMicrotask(() => this.root.querySelector<HTMLElement>('[data-action="open-today-summary"]')?.focus());
   }
 
   private onSubmit(event: Event): void {
