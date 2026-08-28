@@ -1048,6 +1048,77 @@ describe("Today phone layout", () => {
   });
 });
 
+describe("meal-targeted add food", () => {
+  const mountDay = (state: AppState) => {
+    const root = document.createElement("main");
+    new DaybookApp(root, { load: () => state, save: vi.fn() }).start();
+    root.querySelector<HTMLElement>('.meal-row[data-period="dinner"]')!.click();
+    return root;
+  };
+
+  const saveNewFood = (root: HTMLElement, name: string) => {
+    const form = root.querySelector<HTMLFormElement>('form[data-form="food"]')!;
+    form.querySelector<HTMLInputElement>('input[name="name"]')!.value = name;
+    form.querySelector<HTMLInputElement>('input[name="servingAmount"]')!.value = "1";
+    form.querySelector<HTMLInputElement>('input[name="servingUnit"]')!.value = "serving";
+    form.querySelector<HTMLInputElement>('input[name="calories"]')!.value = "420";
+    form.requestSubmit();
+  };
+
+  it("keeps Dinner selected when logging an existing library food", () => {
+    const state = createState("2026-08-21");
+    Object.assign(state.profile, { onboardingComplete: true, manualDailyGuide: 2000 });
+    const food = normalizeFood({ name: "Dinner plan", nutrition: { calories: 420 } });
+    state.foods.push(food);
+    const root = mountDay(state);
+
+    root.querySelector<HTMLElement>('.meal-view-add[data-period="dinner"]')!.click();
+    root.querySelector<HTMLElement>(`[data-action="log"][data-id="${food.id}"]`)!.click();
+    const form = root.querySelector<HTMLFormElement>('form[data-form="log"]')!;
+    expect(form.querySelector<HTMLSelectElement>('select[name="period"]')?.value).toBe("dinner");
+    form.requestSubmit();
+    expect(state.entries.at(-1)?.period).toBe("dinner");
+  });
+
+  it("carries Dinner through Create a new food before logging it", () => {
+    const state = createState("2026-08-21");
+    Object.assign(state.profile, { onboardingComplete: true, manualDailyGuide: 2000 });
+    state.foods.push(normalizeFood({ name: "Existing food", nutrition: { calories: 100 } }));
+    const root = mountDay(state);
+
+    root.querySelector<HTMLElement>('.meal-view-add[data-period="dinner"]')!.click();
+    root.querySelector<HTMLElement>('[data-action="new-food"]')!.click();
+    saveNewFood(root, "New dinner food");
+    const log = root.querySelector<HTMLFormElement>('form[data-form="log"]')!;
+    expect(log.querySelector<HTMLSelectElement>('select[name="period"]')?.value).toBe("dinner");
+    log.requestSubmit();
+    expect(state.entries.at(-1)).toMatchObject({ period: "dinner", nameSnapshot: "New dinner food" });
+  });
+
+  it("keeps Dinner when an empty library opens the new-food editor directly", () => {
+    const state = createState("2026-08-21");
+    Object.assign(state.profile, { onboardingComplete: true, manualDailyGuide: 2000 });
+    const root = mountDay(state);
+
+    root.querySelector<HTMLElement>('.meal-view-add[data-period="dinner"]')!.click();
+    saveNewFood(root, "First dinner food");
+    expect(root.querySelector<HTMLSelectElement>('form[data-form="log"] select[name="period"]')?.value).toBe("dinner");
+  });
+
+  it("keeps the generic Today add path meal-neutral", () => {
+    const state = createState("2026-08-21");
+    Object.assign(state.profile, { onboardingComplete: true, manualDailyGuide: 2000 });
+    const root = document.createElement("main");
+    new DaybookApp(root, { load: () => state, save: vi.fn() }).start();
+
+    root.querySelector<HTMLElement>('.today-add[data-action="choose-food"]')!.click();
+    saveNewFood(root, "Library only food");
+    expect(root.querySelector('form[data-form="log"]')).toBeNull();
+    expect(state.entries).toHaveLength(0);
+    expect(state.foods.at(-1)?.name).toBe("Library only food");
+  });
+});
+
 describe("food photo capture", () => {
   const reply = {
     name: "Greek yogurt",

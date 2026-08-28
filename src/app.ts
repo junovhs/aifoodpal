@@ -15,7 +15,7 @@ import type { AccountController } from "./account";
 import { CloudStateRepository, type SyncStatus } from "./cloud-sync";
 
 type View = "day" | "calendar" | "library" | "trend" | "settings" | "plan";
-type FoodModal = { kind: "food"; food?: Food; draft?: FoodInput; aiPrompt?: string; aiMessage?: string; aiError?: string; captureNote?: string; capturing?: CaptureMode };
+type FoodModal = { kind: "food"; food?: Food; draft?: FoodInput; period?: Period; aiPrompt?: string; aiMessage?: string; aiError?: string; captureNote?: string; capturing?: CaptureMode };
 
 /** The impure half of photo capture, injected so the food editor is testable without a canvas or a server. */
 export interface FoodCaptureDeps {
@@ -739,7 +739,7 @@ export class DaybookApp {
       this.render();
       queueMicrotask(() => this.root.querySelector<HTMLElement>('.today-summary-modal [data-action="close"]')?.focus());
     }
-    if (action === "new-food") { this.modal = { kind: "food" }; this.render(); }
+    if (action === "new-food") { const period = this.modal?.kind === "choose" ? this.modal.period : undefined; this.modal = { kind: "food", period }; this.render(); }
     if (action === "build-combo" && this.state.foods.length >= 2) { this.modal = { kind: "combo" }; this.render(); }
     if (action === "edit-food") { const food = this.food(button.dataset.id); if (food) { this.modal = { kind: "food", food }; this.render(); } }
     if (action === "request-delete-food") { const food = this.food(button.dataset.id); if (food) { this.modal = { kind: "delete-food", food }; this.render(); } }
@@ -759,7 +759,11 @@ export class DaybookApp {
         this.save("weight entry deleted");
       } else this.render();
     }
-    if (action === "choose-food") { this.modal = this.state.foods.length ? { kind: "choose", period: button.dataset.period ? normalizePeriod(button.dataset.period) : undefined } : { kind: "food" }; this.render(); }
+    if (action === "choose-food") {
+      const period = button.dataset.period ? normalizePeriod(button.dataset.period) : undefined;
+      this.modal = this.state.foods.length ? { kind: "choose", period } : { kind: "food", period };
+      this.render();
+    }
     if (action === "open-quick") { this.modal = { kind: "quick", calories: 0, period: "snacks" }; this.render(); }
     if (action === "quick-increment" && this.modal?.kind === "quick") { this.modal.calories += Number(button.dataset.amount) || 0; this.render(); }
     if (action === "log") { const food = this.food(button.dataset.id); if (food) { const period = this.modal?.kind === "choose" ? this.modal.period : undefined; this.modal = { kind: "log", food, period }; this.render(); } }
@@ -886,10 +890,12 @@ export class DaybookApp {
     const previous = this.food(id);
     const draft = this.captureFoodDraft(data);
     const imported = this.modal?.kind === "food" ? this.modal.draft : undefined;
+    const period = !previous && this.modal?.kind === "food" ? this.modal.period : undefined;
     const food = normalizeFood({ ...previous, ...imported, ...draft, id: previous?.id });
     const index = previous ? this.state.foods.findIndex((item) => item.id === previous.id) : -1;
     if (index >= 0) this.state.foods[index] = food; else this.state.foods.push(food);
-    this.modal = null; this.save("food saved");
+    this.modal = period ? { kind: "log", food, period } : null;
+    this.save(period ? `food saved — ready to add to ${period}` : "food saved");
   }
 
   private submitQuick(data: FormData): void {
